@@ -65,7 +65,7 @@ class ScriptGenerationConfig:
         self.openai_api_key = kwargs.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
         self.model = kwargs.get('model') or os.getenv('OPENAI_MODEL', 'gpt-4')
         self.temperature = float(kwargs.get('temperature') or os.getenv('OPENAI_TEMPERATURE', '0.3'))
-        self.max_tokens = int(kwargs.get('max_tokens') or os.getenv('OPENAI_MAX_TOKENS', '3000'))
+        self.max_tokens = int(kwargs.get('max_tokens') or os.getenv('OPENAI_MAX_TOKENS', '8000'))
         
         # Default settings
         self.fallback_keep_ratio = float(kwargs.get('fallback_keep_ratio', '0.8'))  # Keep 80% if no AI
