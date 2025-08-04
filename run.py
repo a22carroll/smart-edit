@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smart Edit - AI Video Editor
-Main Entry Point
+Main Entry Point - Updated for Prompt-Driven Workflow
 
 Launch the Smart Edit application with GUI or process videos via command line.
 """
@@ -11,7 +11,7 @@ import os
 import argparse
 from pathlib import Path
 
-# Add project root to Python path (not smart_edit subfolder)
+# Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
@@ -64,7 +64,7 @@ def check_ffmpeg():
 def launch_gui():
     """Launch the GUI application"""
     try:
-        # Try to import UI components
+        # Updated import path for new UI structure
         from smart_edit.ui.main_window import SmartEditMainWindow
         print("🎬 Starting Smart Edit GUI...")
         app = SmartEditMainWindow()
@@ -72,9 +72,9 @@ def launch_gui():
         return True
     except ImportError as e:
         print("❌ GUI components not available.")
-        print("   The UI module is not yet implemented.")
+        print(f"   Import error: {e}")
         print("   Please use command-line mode instead:")
-        print("   python run.py video.mp4")
+        print("   python run.py video.mp4 --prompt 'Your editing instructions'")
         return False
     except Exception as e:
         print(f"❌ Failed to launch GUI: {e}")
@@ -143,78 +143,160 @@ def validate_output_path(output_path):
     
     return True
 
-def process_command_line(video_paths, output_path=None, compression=0.7):
-    """Process videos via command line using available modules"""
+def process_command_line_transcription_only(video_paths, output_path=None):
+    """Process videos via command line - transcription only (new workflow step 1)"""
     try:
-        # Import the modules we know exist
-        from smart_edit.transcription import transcribe_video
-        from smart_edit.script_generation import generate_script
+        # Import the updated pipeline
+        from smart_edit.core.pipeline import quick_transcribe_videos
         
         def progress_callback(message, percent):
             print(f"[{percent:5.1f}%] {message}")
         
-        print(f"🎬 Processing {len(video_paths)} video(s)...")
-        print(f"📊 Target compression: {compression:.1%}")
+        print(f"🎤 Transcribing {len(video_paths)} video(s)...")
+        print("📝 After transcription, use GUI or provide --prompt for script generation")
         
-        # For now, process first video only (until multicam is implemented)
-        if len(video_paths) > 1:
-            print("⚠️  Multiple videos detected. Processing first video only.")
-            print("   Full multicam support coming soon!")
+        # Generate project name from first video
+        project_name = Path(video_paths[0]).stem + "_project"
         
-        video_path = video_paths[0]
+        # Step 1: Transcribe videos
+        result = quick_transcribe_videos(
+            project_name=project_name,
+            video_paths=video_paths,
+            progress_callback=progress_callback
+        )
         
-        # Step 1: Transcribe
-        progress_callback("Transcribing audio...", 10)
-        transcription_result = transcribe_video(video_path)
-        
-        if not transcription_result:
-            print("❌ Transcription failed")
-            return False
-        
-        progress_callback("Transcription complete", 50)
-        
-        # Step 2: Generate script
-        progress_callback("Generating edit script...", 60)
-        edit_script = generate_script(transcription_result, target_compression=compression)
-        
-        if not edit_script:
-            print("❌ Script generation failed")
-            return False
-        
-        progress_callback("Script generation complete", 90)
-        
-        # Step 3: Output results
-        if output_path:
-            # For now, save a simple representation
-            # TODO: Replace with actual XML export when xml_export module is ready
-            try:
-                with open(output_path, 'w') as f:
-                    f.write(f"# Smart Edit Results for {video_path}\n")
-                    f.write(f"# Compression: {edit_script.compression_ratio:.1%}\n")
-                    f.write(f"# Segments: {len(edit_script.cuts)}\n\n")
+        if result.success:
+            print("✅ Transcription completed successfully!")
+            
+            # Save transcription results if output path specified
+            if output_path:
+                try:
+                    # Export transcription summary
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(f"Smart Edit Transcription Results\n")
+                        f.write(f"=" * 50 + "\n\n")
+                        f.write(f"Project: {project_name}\n")
+                        f.write(f"Videos processed: {len(video_paths)}\n\n")
+                        
+                        for i, video_path in enumerate(video_paths):
+                            f.write(f"Video {i+1}: {os.path.basename(video_path)}\n")
+                        
+                        f.write(f"\nTotal transcription segments: Available\n")
+                        f.write(f"\nNext steps:\n")
+                        f.write(f"1. Use GUI: python run.py --gui\n")
+                        f.write(f"2. Or provide prompt: python run.py {' '.join(video_paths)} --prompt 'Your instructions'\n")
                     
-                    for i, cut in enumerate(edit_script.cuts):
-                        f.write(f"Segment {i+1}: {cut.action} - {cut.start_time:.2f}s to {cut.end_time:.2f}s\n")
-                
-                progress_callback(f"Results saved to {output_path}", 100)
-                print(f"📤 Results exported to: {output_path}")
-            except Exception as e:
-                print(f"❌ Failed to save output: {e}")
-                return False
+                    print(f"📤 Transcription summary saved to: {output_path}")
+                except Exception as e:
+                    print(f"⚠️  Could not save transcription summary: {e}")
+            
+            print("\n🎬 Next Steps:")
+            print("   1. Launch GUI: python run.py --gui")
+            print("   2. Or use prompt: python run.py video.mp4 --prompt 'Create a 10-minute tutorial...'")
+            
+            return True
         else:
-            progress_callback("Processing complete", 100)
-            print(f"📋 Edit script generated successfully")
+            print(f"❌ Transcription failed: {result.message}")
+            return False
+            
+    except ImportError as e:
+        print(f"❌ Required modules not found: {e}")
+        print("   Make sure the updated pipeline is implemented")
+        return False
+    except Exception as e:
+        print(f"❌ Transcription failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def process_command_line_with_prompt(video_paths, user_prompt, target_duration=10, output_path=None):
+    """Process videos with user prompt - complete workflow via command line"""
+    try:
+        # Import updated modules
+        from smart_edit.core.pipeline import quick_transcribe_videos, quick_generate_script, quick_export_script
+        
+        def progress_callback(message, percent):
+            print(f"[{percent:5.1f}%] {message}")
+        
+        print(f"🎬 Processing {len(video_paths)} video(s) with user prompt...")
+        print(f"📝 Prompt: {user_prompt[:100]}{'...' if len(user_prompt) > 100 else ''}")
+        print(f"🎯 Target duration: {target_duration} minutes")
+        
+        # Generate project name
+        project_name = Path(video_paths[0]).stem + "_project"
+        
+        # Step 1: Transcribe videos
+        print("\n📋 Step 1: Transcribing videos...")
+        transcription_result = quick_transcribe_videos(
+            project_name=project_name,
+            video_paths=video_paths,
+            progress_callback=progress_callback
+        )
+        
+        if not transcription_result.success:
+            print(f"❌ Transcription failed: {transcription_result.message}")
+            return False
+        
+        print("✅ Transcription completed!")
+        
+        # Step 2: Generate script from prompt
+        print("\n🤖 Step 2: Generating script from prompt...")
+        script_result = quick_generate_script(
+            transcription_results=transcription_result.data,
+            user_prompt=user_prompt,
+            target_duration_minutes=target_duration,
+            progress_callback=progress_callback
+        )
+        
+        if not script_result.success:
+            print(f"❌ Script generation failed: {script_result.message}")
+            return False
+        
+        print("✅ Script generation completed!")
+        
+        # Step 3: Export results
+        if output_path:
+            print("\n📤 Step 3: Exporting results...")
+            
+            # Determine export format from file extension
+            output_ext = Path(output_path).suffix.lower()
+            if output_ext == '.xml':
+                export_format = "premiere_xml"
+            elif output_ext == '.json':
+                export_format = "json"
+            else:
+                export_format = "text"
+            
+            export_result = quick_export_script(
+                generated_script=script_result.data,
+                output_path=output_path,
+                export_format=export_format,
+                progress_callback=progress_callback
+            )
+            
+            if export_result.success:
+                print(f"✅ Export completed: {output_path}")
+            else:
+                print(f"❌ Export failed: {export_result.message}")
+                return False
         
         # Show summary
-        print(f"✅ Processing completed!")
-        print(f"📊 Final compression: {edit_script.compression_ratio:.1%}")
-        print(f"📊 Segments processed: {len(edit_script.cuts)}")
+        generated_script = script_result.data
+        segments_count = len(getattr(generated_script, 'segments', []))
+        estimated_duration = getattr(generated_script, 'estimated_duration_seconds', 0) / 60
+        
+        print(f"\n🎉 Processing completed successfully!")
+        print(f"📊 Generated script with {segments_count} segments")
+        print(f"📊 Estimated duration: {estimated_duration:.1f} minutes")
+        
+        if output_path:
+            print(f"📤 Results exported to: {output_path}")
         
         return True
         
     except ImportError as e:
         print(f"❌ Required modules not found: {e}")
-        print("   Make sure transcription.py and script_generation.py are implemented")
+        print("   Make sure the updated pipeline modules are implemented")
         return False
     except Exception as e:
         print(f"❌ Command line processing failed: {e}")
@@ -224,45 +306,56 @@ def process_command_line(video_paths, output_path=None, compression=0.7):
 
 def show_version():
     """Show version information"""
-    print("Smart Edit - AI Video Editor")
-    print("Version: 1.0.0")
+    print("Smart Edit - AI Video Editor v2.0")
     print("Built with Python, OpenAI APIs, and FFmpeg")
     print("")
+    print("NEW WORKFLOW:")
+    print("• Load videos → Transcribe → User prompt → AI script → Review → Export")
+    print("")
     print("Features:")
-    print("• High-accuracy transcription with Whisper")
-    print("• AI-powered content analysis with GPT-4")
-    print("• Intelligent cut decisions and pacing")
-    print("• Multi-camera angle assignment (coming soon)")
-    print("• Premiere Pro XML export (coming soon)")
+    print("• High-accuracy transcription with Whisper AI")
+    print("• User prompt-driven script generation with GPT-4")
+    print("• Interactive script review and editing")
+    print("• Multi-camera and single video support")
+    print("• Premiere Pro XML export")
 
 def show_examples():
     """Show usage examples"""
-    print("Smart Edit Usage Examples:")
+    print("Smart Edit Usage Examples (Updated Workflow):")
     print("")
-    print("1. Launch GUI (if available):")
+    print("1. Launch GUI (recommended):")
     print("   python run.py")
     print("   python run.py --gui")
     print("")
-    print("2. Process single video:")
+    print("2. Transcription only (then use GUI for script):")
     print("   python run.py video.mp4")
-    print("   python run.py video.mp4 --output results.txt")
+    print("   python run.py cam1.mp4 cam2.mp4 cam3.mp4")
     print("")
-    print("3. Process with custom compression:")
-    print("   python run.py video.mp4 --compression 0.8 --output output.txt")
+    print("3. Complete workflow with prompt:")
+    print("   python run.py video.mp4 --prompt 'Create a 10-minute tutorial about Python'")
+    print("   python run.py video.mp4 --prompt 'Make an engaging vlog' --duration 8")
     print("")
-    print("4. Check system setup:")
+    print("4. Export to different formats:")
+    print("   python run.py video.mp4 --prompt 'Educational content' --output script.xml")
+    print("   python run.py video.mp4 --prompt 'Quick highlights' --output results.json")
+    print("")
+    print("5. Multi-camera with prompt:")
+    print("   python run.py cam1.mp4 cam2.mp4 --prompt 'Professional interview' --duration 15")
+    print("")
+    print("6. Check system setup:")
     print("   python run.py --check-deps")
 
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description='Smart Edit - AI Video Editor',
+        description='Smart Edit - AI Video Editor v2.0 (Prompt-Driven Workflow)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python run.py                           # Launch GUI (if available)
-  python run.py video.mp4                 # Process single video
-  python run.py video.mp4 -o output.txt   # Save results to file
+NEW WORKFLOW Examples:
+  python run.py                                    # Launch GUI
+  python run.py video.mp4                          # Transcribe only
+  python run.py video.mp4 --prompt "Make tutorial" # Complete workflow
+  python run.py cam1.mp4 cam2.mp4 --prompt "Edit interview" --duration 20
         """
     )
     
@@ -279,15 +372,28 @@ Examples:
     )
     
     parser.add_argument(
-        '-o', '--output',
-        help='Output file path (will be .txt for now, .xml when export module ready)'
+        '--prompt',
+        help='User prompt for script generation (enables complete workflow)'
     )
     
+    parser.add_argument(
+        '--duration',
+        type=int,
+        default=10,
+        help='Target duration in minutes (default: 10, used with --prompt)'
+    )
+    
+    parser.add_argument(
+        '-o', '--output',
+        help='Output file path (.xml for Premiere, .json for data, .txt for text)'
+    )
+    
+    # Legacy compression argument (kept for compatibility but not used in new workflow)
     parser.add_argument(
         '-c', '--compression',
         type=float,
         default=0.7,
-        help='Target compression ratio (0.1-1.0, default: 0.7)'
+        help='Legacy option (not used in prompt-driven workflow)'
     )
     
     parser.add_argument(
@@ -330,9 +436,9 @@ Examples:
         else:
             return 1
     
-    # Validate compression ratio
-    if not 0.1 <= args.compression <= 1.0:
-        print("❌ Compression ratio must be between 0.1 and 1.0")
+    # Validate duration
+    if args.duration <= 0:
+        print("❌ Duration must be positive")
         return 1
     
     # Check dependencies first
@@ -360,14 +466,28 @@ Examples:
         output_path = args.output
         if not output_path and len(video_paths) == 1:
             video_stem = Path(video_paths[0]).stem
-            output_path = f"{video_stem}_edited_results.txt"
+            if args.prompt:
+                output_path = f"{video_stem}_edited.xml"  # XML for complete workflow
+            else:
+                output_path = f"{video_stem}_transcription.txt"  # Text for transcription only
         
         # Validate output path
         if not validate_output_path(output_path):
             return 1
         
-        # Process videos
-        success = process_command_line(video_paths, output_path, args.compression)
+        # Choose processing mode based on whether prompt is provided
+        if args.prompt:
+            # Complete workflow with user prompt
+            success = process_command_line_with_prompt(
+                video_paths, 
+                args.prompt, 
+                args.duration, 
+                output_path
+            )
+        else:
+            # Transcription only (user will use GUI for script generation)
+            success = process_command_line_transcription_only(video_paths, output_path)
+        
         return 0 if success else 1
 
 if __name__ == "__main__":

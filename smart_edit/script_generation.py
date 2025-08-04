@@ -1,17 +1,16 @@
 """
-Smart Edit Script Generation Module
+Smart Edit Script Generation Module - Fixed and Simplified
 
-Analyzes transcription data and generates intelligent edit scripts using AI.
-Creates reviewable edit decisions that users can modify before final export.
+Takes transcriptions + user prompt → Creates readable script + timeline data
+User-driven instead of automatic analysis.
 """
 
 import json
 import logging
 import time
 import os
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict
-from enum import Enum
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -25,78 +24,54 @@ try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
-    logger.warning("OpenAI not available. AI features will be limited.")
+    logger.warning("OpenAI not available. Script generation will use fallback mode.")
     OpenAI = None
     OPENAI_AVAILABLE = False
 
 # Import from transcription module
-from transcription import TranscriptionResult, TranscriptSegment
-
-class EditAction(Enum):
-    KEEP = "keep"
-    REMOVE = "remove"
-    SPEED_UP = "speed_up"
-    SLOW_DOWN = "slow_down"
-
-class ConfidenceLevel(Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+try:
+    from .transcription import TranscriptionResult, TranscriptSegment
+except ImportError:
+    # Fallback for direct execution
+    from transcription import TranscriptionResult, TranscriptSegment
 
 @dataclass
-class CutDecision:
-    """Individual edit decision for a segment"""
-    segment_id: int
+class ScriptSegment:
+    """A segment in the final script"""
     start_time: float
     end_time: float
-    original_text: str
-    action: EditAction
-    reason: str
-    confidence: ConfidenceLevel
-    speed_factor: Optional[float] = None
+    content: str
+    video_index: int  # Which video file this came from (0, 1, 2...)
+    original_segment_id: int  # Reference to original transcript segment
+    keep: bool = True  # Whether to include in final edit
+    reason: str = ""  # Why this segment was selected/modified
 
-@dataclass
-class TransitionPoint:
-    """How to connect two kept segments"""
-    from_segment_id: int
-    to_segment_id: int
-    transition_type: str
-    duration: float
-    reason: str
-
-@dataclass
-class EditScript:
-    """Complete edit script with all decisions"""
-    cuts: List[CutDecision]
-    transitions: List[TransitionPoint]
-    estimated_final_duration: float
-    original_duration: float
-    compression_ratio: float
-    metadata: Dict[str, Any]
+@dataclass 
+class GeneratedScript:
+    """Complete generated script with readable text and timeline data"""
+    full_text: str  # The complete readable script for UI display
+    segments: List[ScriptSegment]  # Timeline segments with timing data
+    title: str  # Generated title for the video
+    target_duration_minutes: int  # Target duration requested
+    estimated_duration_seconds: float  # Estimated final duration
+    original_duration_seconds: float  # Total original duration
+    user_prompt: str  # Original user instructions
+    metadata: Dict[str, Any]  # Additional information
 
 class ScriptGenerationConfig:
-    """Configuration for script generation"""
+    """Simplified configuration for script generation"""
     def __init__(self, **kwargs):
-        # Load from environment with defaults
+        # OpenAI settings
         self.openai_api_key = kwargs.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
         self.model = kwargs.get('model') or os.getenv('OPENAI_MODEL', 'gpt-4')
-        self.target_compression = float(kwargs.get('target_compression') or os.getenv('DEFAULT_COMPRESSION_RATIO', '0.7'))
-        self.remove_filler_words = self._get_bool(kwargs, 'remove_filler_words', 'REMOVE_FILLER_WORDS', True)
-        self.min_pause_threshold = float(kwargs.get('min_pause_threshold') or os.getenv('MIN_PAUSE_THRESHOLD', '2.0'))
-        self.keep_question_segments = self._get_bool(kwargs, 'keep_question_segments', 'KEEP_QUESTION_SEGMENTS', True)
-        self.max_speed_increase = float(kwargs.get('max_speed_increase') or os.getenv('DEFAULT_SPEED_INCREASE', '1.3'))
-        self.max_tokens = int(kwargs.get('max_tokens') or os.getenv('OPENAI_MAX_TOKENS', '2000'))
         self.temperature = float(kwargs.get('temperature') or os.getenv('OPENAI_TEMPERATURE', '0.3'))
-    
-    def _get_bool(self, kwargs: dict, key: str, env_key: str, default: bool) -> bool:
-        """Helper to get boolean values from kwargs or environment"""
-        if key in kwargs:
-            return kwargs[key]
-        env_val = os.getenv(env_key)
-        return env_val.lower() == 'true' if env_val else default
+        self.max_tokens = int(kwargs.get('max_tokens') or os.getenv('OPENAI_MAX_TOKENS', '3000'))
+        
+        # Default settings
+        self.fallback_keep_ratio = float(kwargs.get('fallback_keep_ratio', '0.8'))  # Keep 80% if no AI
 
 class SmartScriptGenerator:
-    """AI-powered script generation for video editing"""
+    """User prompt-driven script generation"""
     
     def __init__(self, config: Optional[ScriptGenerationConfig] = None):
         self.config = config or ScriptGenerationConfig()
@@ -105,255 +80,403 @@ class SmartScriptGenerator:
     
     def _setup_openai(self) -> bool:
         """Initialize OpenAI client"""
-        if not OPENAI_AVAILABLE or not self.config.openai_api_key:
-            logger.warning("OpenAI not available or no API key. Using rule-based generation only.")
+        if not OPENAI_AVAILABLE:
+            logger.warning("OpenAI library not installed. Install with: pip install openai")
+            return False
+            
+        if not self.config.openai_api_key:
+            logger.warning("No OpenAI API key found. Set OPENAI_API_KEY environment variable.")
             return False
         
         try:
             self.client = OpenAI(api_key=self.config.openai_api_key)
-            logger.info(f"OpenAI client initialized with model: {self.config.model}")
+            # Test the client with a simple call
+            logger.info(f"OpenAI client initialized successfully with model: {self.config.model}")
             return True
         except Exception as e:
-            logger.warning(f"Failed to initialize OpenAI client: {e}")
+            logger.error(f"Failed to initialize OpenAI client: {e}")
             return False
     
-    def generate_script(self, transcription: TranscriptionResult) -> EditScript:
-        """Generate complete edit script from transcription"""
+    def generate_script_from_prompt(self, 
+                                   transcriptions: List[TranscriptionResult], 
+                                   user_prompt: str,
+                                   target_duration_minutes: int = 10) -> GeneratedScript:
+        """
+        Generate script based on user prompt
+        
+        Args:
+            transcriptions: List of transcription results (one per video file)
+            user_prompt: User's instructions for what the video should be about
+            target_duration_minutes: Target duration in minutes
+        
+        Returns:
+            GeneratedScript with full text and timeline data
+        """
         start_time = time.time()
-        logger.info(f"Generating edit script for {len(transcription.segments)} segments")
+        logger.info(f"🤖 Generating script from user prompt...")
+        logger.info(f"📝 User prompt: {user_prompt[:100]}{'...' if len(user_prompt) > 100 else ''}")
+        logger.info(f"🎬 Processing {len(transcriptions)} video(s)")
         
-        # Analyze content and generate decisions
-        content_analysis = self._analyze_content(transcription) if self.ai_enabled else {}
-        cut_decisions = self._generate_cut_decisions(transcription, content_analysis)
-        transitions = self._generate_transitions(cut_decisions)
+        # Validate inputs
+        if not transcriptions:
+            raise ValueError("No transcriptions provided")
+        if not user_prompt.strip():
+            raise ValueError("User prompt cannot be empty")
+        if target_duration_minutes <= 0:
+            raise ValueError("Target duration must be positive")
         
-        # Calculate metrics
-        final_duration = self._calculate_final_duration(cut_decisions)
-        original_duration = transcription.metadata['total_duration']
-        compression_ratio = final_duration / original_duration if original_duration > 0 else 0.0
+        # Use AI if available, otherwise fallback
+        if self.ai_enabled:
+            try:
+                script = self._generate_with_ai(transcriptions, user_prompt, target_duration_minutes)
+                script.metadata["ai_used"] = True
+            except Exception as e:
+                logger.error(f"AI generation failed: {e}")
+                logger.info("Falling back to rule-based generation")
+                script = self._generate_fallback(transcriptions, user_prompt, target_duration_minutes)
+                script.metadata["ai_used"] = False
+        else:
+            script = self._generate_fallback(transcriptions, user_prompt, target_duration_minutes)
+            script.metadata["ai_used"] = False
         
+        # Add timing metadata
         processing_time = time.time() - start_time
-        metadata = {
-            "generation_time": round(processing_time, 2),
-            "ai_enabled": self.ai_enabled,
-            "model_used": self.config.model if self.ai_enabled else "rule_based",
-            "segments_analyzed": len(transcription.segments),
-            "segments_kept": len([c for c in cut_decisions if c.action == EditAction.KEEP]),
-            "segments_removed": len([c for c in cut_decisions if c.action == EditAction.REMOVE])
-        }
+        script.metadata.update({
+            "generation_time_seconds": round(processing_time, 2),
+            "model_used": self.config.model if self.ai_enabled else "fallback",
+            "total_original_segments": sum(len(t.segments) for t in transcriptions),
+            "segments_in_script": len(script.segments)
+        })
         
-        edit_script = EditScript(
-            cuts=cut_decisions,
-            transitions=transitions,
-            estimated_final_duration=final_duration,
-            original_duration=original_duration,
-            compression_ratio=compression_ratio,
-            metadata=metadata
-        )
+        logger.info(f"✅ Script generated in {processing_time:.2f}s")
+        logger.info(f"📊 {len(script.segments)} segments selected from {script.metadata['total_original_segments']} total")
         
-        logger.info(f"Edit script generated: {compression_ratio:.1%} compression in {processing_time:.2f}s")
-        return edit_script
+        return script
     
-    def _analyze_content(self, transcription: TranscriptionResult) -> Dict[str, Any]:
-        """AI analysis of content importance"""
+    def _generate_with_ai(self, transcriptions: List[TranscriptionResult], 
+                         user_prompt: str, target_duration: int) -> GeneratedScript:
+        """Generate script using AI"""
+        
+        # Prepare transcript data for AI (limit to avoid token limits)
+        all_segments = []
+        for video_idx, transcription in enumerate(transcriptions):
+            for seg_idx, segment in enumerate(transcription.segments):
+                all_segments.append({
+                    "video": video_idx,
+                    "segment_id": seg_idx,
+                    "start": round(segment.start, 2),
+                    "end": round(segment.end, 2),
+                    "text": segment.text.strip(),
+                    "duration": round(segment.end - segment.start, 2),
+                    "content_type": getattr(segment, 'content_type', 'unknown')
+                })
+        
+        # Limit segments to avoid API token limits with smarter selection
+        if len(all_segments) > 50:
+            logger.warning(f"Too many segments ({len(all_segments)}), selecting 50 most important")
+            # Keep first 20, last 20, and 10 from middle for better coverage
+            selected_segments = (
+                all_segments[:20] + 
+                all_segments[len(all_segments)//2-5:len(all_segments)//2+5] + 
+                all_segments[-20:]
+            )
+            all_segments = selected_segments[:50]  # Ensure exactly 50
+        
+        # Create AI prompt
+        ai_prompt = self._create_ai_prompt(all_segments, user_prompt, target_duration)
+        
+        # Make API call
         try:
-            # Prepare segment summaries
-            segments = [
-                {
-                    "id": i,
-                    "text": seg.text,
-                    "duration": seg.end - seg.start,
-                    "content_type": seg.content_type,
-                    "contains_filler": seg.contains_filler
-                }
-                for i, seg in enumerate(transcription.segments[:20])  # Limit for API
-            ]
-            
-            prompt = f"""
-Analyze this video transcript for intelligent editing. Return JSON only.
-
-Segments: {json.dumps(segments, indent=2)}
-
-Return:
-{{
-    "key_segments": [list of segment IDs that are most important],
-    "removable_segments": [list of segment IDs that can be safely removed],
-    "summary": "brief editing strategy"
-}}
-
-Focus on identifying core valuable content vs filler/repetition.
-"""
-            
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "You are an expert video editor. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system", 
+                        "content": "You are an expert video editor and scriptwriter. Create engaging, well-structured video scripts based on transcript data and user requirements. Always return valid JSON."
+                    },
+                    {
+                        "role": "user", 
+                        "content": ai_prompt
+                    }
                 ],
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens
             )
             
-            return json.loads(response.choices[0].message.content)
+            # Parse response
+            response_text = response.choices[0].message.content.strip()
             
+            # Handle potential JSON formatting issues
+            if response_text.startswith("```json"):
+                response_text = response_text[7:-3].strip()
+            elif response_text.startswith("```"):
+                response_text = response_text[3:-3].strip()
+            
+            ai_result = json.loads(response_text)
+            
+            # Convert AI response to our format
+            return self._convert_ai_response(ai_result, transcriptions, user_prompt, target_duration)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}")
+            raise Exception(f"AI returned invalid JSON: {e}")
         except Exception as e:
-            logger.warning(f"AI analysis failed: {e}. Using rule-based analysis.")
-            return {}
+            logger.error(f"AI API call failed: {e}")
+            raise Exception(f"AI generation failed: {e}")
     
-    def _generate_cut_decisions(self, transcription: TranscriptionResult, 
-                               analysis: Dict) -> List[CutDecision]:
-        """Generate edit decisions for each segment"""
-        decisions = []
-        ai_key_segments = set(analysis.get("key_segments", []))
-        ai_removable = set(analysis.get("removable_segments", []))
+    def _create_ai_prompt(self, segments: List[Dict], user_prompt: str, target_duration: int) -> str:
+        """Create the prompt for AI script generation"""
         
-        for i, segment in enumerate(transcription.segments):
-            decision = self._analyze_segment(segment, i, ai_key_segments, ai_removable)
-            decisions.append(decision)
+        total_duration = sum(seg["duration"] for seg in segments)
         
-        # Ensure we keep at least some content
-        keep_count = len([d for d in decisions if d.action == EditAction.KEEP])
-        if keep_count == 0 and decisions:
-            decisions[0].action = EditAction.KEEP
-            decisions[0].reason = "Forced keep - no other content selected"
-            decisions[0].confidence = ConfidenceLevel.LOW
+        return f"""
+Create a {target_duration}-minute video script based on the transcript segments below and the user's specific instructions.
+
+USER INSTRUCTIONS:
+"{user_prompt}"
+
+TARGET DURATION: {target_duration} minutes
+AVAILABLE CONTENT: {total_duration:.1f} minutes across {len(segments)} segments
+
+TRANSCRIPT SEGMENTS:
+{json.dumps(segments, indent=2)}
+
+Please return a JSON response with this exact structure:
+{{
+    "title": "Engaging title for the video based on the content and user instructions",
+    "script_text": "Complete readable script with timestamps like [0:30] and clear structure",
+    "selected_segments": [
+        {{
+            "video": 0,
+            "segment_id": 0,
+            "start_time": 0.0,
+            "end_time": 15.5,
+            "content": "Edited version of the segment text to include",
+            "reason": "Brief explanation of why this segment was selected"
+        }}
+    ]
+}}
+
+REQUIREMENTS:
+1. Select segments that best fulfill the user's vision and instructions
+2. Create a natural, engaging narrative flow
+3. Target approximately {target_duration} minutes of content
+4. Include clear timestamps in script_text like [1:30], [4:15], etc.
+5. Edit segment text for clarity while preserving the core message
+6. Ensure smooth transitions between selected segments
+7. Return only valid JSON, no additional text or formatting
+"""
+
+    def _convert_ai_response(self, ai_result: Dict, transcriptions: List[TranscriptionResult], 
+                           user_prompt: str, target_duration: int) -> GeneratedScript:
+        """Convert AI response to GeneratedScript format"""
         
-        return decisions
-    
-    def _analyze_segment(self, segment: TranscriptSegment, segment_id: int,
-                        ai_key: set, ai_removable: set) -> CutDecision:
-        """Analyze individual segment and make edit decision"""
+        # Validate AI response structure
+        required_keys = ["title", "script_text", "selected_segments"]
+        for key in required_keys:
+            if key not in ai_result:
+                raise ValueError(f"AI response missing required key: {key}")
         
-        action = EditAction.KEEP
-        reason = "Default keep"
-        confidence = ConfidenceLevel.MEDIUM
-        speed_factor = None
+        # Convert selected segments
+        script_segments = []
+        estimated_duration = 0.0
         
-        # AI decisions take priority
-        if segment_id in ai_key:
-            action = EditAction.KEEP
-            reason = "AI identified as key content"
-            confidence = ConfidenceLevel.HIGH
-        elif segment_id in ai_removable:
-            action = EditAction.REMOVE
-            reason = "AI identified as removable"
-            confidence = ConfidenceLevel.MEDIUM
+        for selected in ai_result.get("selected_segments", []):
+            try:
+                segment = ScriptSegment(
+                    start_time=float(selected["start_time"]),
+                    end_time=float(selected["end_time"]),
+                    content=selected["content"].strip(),
+                    video_index=int(selected["video"]),
+                    original_segment_id=int(selected["segment_id"]),
+                    keep=True,
+                    reason=selected.get("reason", "Selected by AI")
+                )
+                script_segments.append(segment)
+                estimated_duration += segment.end_time - segment.start_time
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Skipping invalid segment in AI response: {e}")
+                continue
         
-        # Rule-based decisions
-        elif (self.config.remove_filler_words and segment.contains_filler and 
-              segment.content_type not in ["main_point", "topic_introduction"]):
-            action = EditAction.REMOVE
-            reason = "Contains filler words"
-            confidence = ConfidenceLevel.HIGH
+        # Calculate original duration
+        original_duration = sum(t.metadata.get('total_duration', 0) for t in transcriptions)
         
-        elif segment.pause_after > self.config.min_pause_threshold:
-            action = EditAction.REMOVE
-            reason = f"Long pause ({segment.pause_after:.1f}s)"
-            confidence = ConfidenceLevel.HIGH
-        
-        elif segment.content_type in ["main_point", "topic_introduction", "conclusion"]:
-            action = EditAction.KEEP
-            reason = f"Important content ({segment.content_type})"
-            confidence = ConfidenceLevel.HIGH
-        
-        elif self.config.keep_question_segments and segment.text.strip().endswith('?'):
-            action = EditAction.KEEP
-            reason = "Question - likely important"
-            confidence = ConfidenceLevel.HIGH
-        
-        elif segment.speech_rate == "slow" and segment.content_type != "conclusion":
-            action = EditAction.SPEED_UP
-            speed_factor = min(1.2, self.config.max_speed_increase)
-            reason = "Slow speech rate"
-            confidence = ConfidenceLevel.MEDIUM
-        
-        return CutDecision(
-            segment_id=segment_id,
-            start_time=segment.start,
-            end_time=segment.end,
-            original_text=segment.text,
-            action=action,
-            reason=reason,
-            confidence=confidence,
-            speed_factor=speed_factor
+        return GeneratedScript(
+            full_text=ai_result["script_text"],
+            segments=script_segments,
+            title=ai_result["title"],
+            target_duration_minutes=target_duration,
+            estimated_duration_seconds=estimated_duration,
+            original_duration_seconds=original_duration,
+            user_prompt=user_prompt,
+            metadata={
+                "ai_model": self.config.model,
+                "video_count": len(transcriptions),
+                "compression_ratio": estimated_duration / original_duration if original_duration > 0 else 0.0
+            }
         )
     
-    def _generate_transitions(self, decisions: List[CutDecision]) -> List[TransitionPoint]:
-        """Generate transitions between kept segments"""
-        transitions = []
-        kept_segments = [d for d in decisions if d.action in [EditAction.KEEP, EditAction.SPEED_UP]]
+    def _generate_fallback(self, transcriptions: List[TranscriptionResult], 
+                          user_prompt: str, target_duration: int) -> GeneratedScript:
+        """Fallback script generation when AI is not available"""
         
-        for i in range(len(kept_segments) - 1):
-            current = kept_segments[i]
-            next_segment = kept_segments[i + 1]
-            
-            time_gap = next_segment.start_time - current.end_time
-            
-            if time_gap > 1.0:
-                transition_type, duration = "fade", 0.5
-                reason = "Large time gap between segments"
-            elif current.original_text.strip().endswith('.'):
-                transition_type, duration = "cut", 0.0
-                reason = "Natural sentence boundary"
-            else:
-                transition_type, duration = "cross_fade", 0.3
-                reason = "Smooth content transition"
-            
-            transitions.append(TransitionPoint(
-                from_segment_id=current.segment_id,
-                to_segment_id=next_segment.segment_id,
-                transition_type=transition_type,
-                duration=duration,
-                reason=reason
-            ))
+        logger.info("Using fallback script generation (no AI)")
         
-        return transitions
+        # Collect all segments
+        all_segments = []
+        script_text_parts = [f"# Video Script\n\n**User Request:** {user_prompt}\n\n"]
+        
+        total_duration = 0.0
+        for video_idx, transcription in enumerate(transcriptions):
+            total_duration += transcription.metadata.get('total_duration', 0)
+            
+            if len(transcriptions) > 1:
+                script_text_parts.append(f"\n## Video {video_idx + 1}\n")
+            
+            for seg_idx, segment in enumerate(transcription.segments):
+                # Simple selection: keep segments that seem important
+                keep_segment = self._should_keep_segment_fallback(segment)
+                
+                if keep_segment:
+                    script_segment = ScriptSegment(
+                        start_time=segment.start,
+                        end_time=segment.end,
+                        content=segment.text.strip(),
+                        video_index=video_idx,
+                        original_segment_id=seg_idx,
+                        keep=True,
+                        reason="Fallback selection"
+                    )
+                    all_segments.append(script_segment)
+                    
+                    # Add to script text with timestamp
+                    minutes = int(segment.start // 60)
+                    seconds = int(segment.start % 60)
+                    script_text_parts.append(f"**[{minutes}:{seconds:02d}]** {segment.text.strip()}\n")
+        
+        # Ensure we don't have too many segments for target duration
+        target_seconds = target_duration * 60
+        if all_segments:
+            current_duration = sum(seg.end_time - seg.start_time for seg in all_segments)
+            if current_duration > target_seconds * 1.2:  # 20% over target
+                # Keep only the first segments to fit roughly in target
+                keep_ratio = (target_seconds * 1.1) / current_duration
+                keep_count = max(1, int(len(all_segments) * keep_ratio))
+                all_segments = all_segments[:keep_count]
+                logger.info(f"Reduced segments to {keep_count} to fit target duration")
+        
+        full_script_text = "".join(script_text_parts)
+        estimated_duration = sum(seg.end_time - seg.start_time for seg in all_segments)
+        
+        return GeneratedScript(
+            full_text=full_script_text,
+            segments=all_segments,
+            title="Video Script (Auto-Generated)",
+            target_duration_minutes=target_duration,
+            estimated_duration_seconds=estimated_duration,
+            original_duration_seconds=total_duration,
+            user_prompt=user_prompt,
+            metadata={
+                "video_count": len(transcriptions),
+                "compression_ratio": estimated_duration / total_duration if total_duration > 0 else 0.0,
+                "fallback_used": True
+            }
+        )
     
-    def _calculate_final_duration(self, decisions: List[CutDecision]) -> float:
-        """Calculate estimated final duration"""
-        final_duration = 0.0
+    def _should_keep_segment_fallback(self, segment: TranscriptSegment) -> bool:
+        """Simple logic for keeping segments when AI is not available"""
         
-        for decision in decisions:
-            if decision.action == EditAction.REMOVE:
-                continue
-            
-            segment_duration = decision.end_time - decision.start_time
-            
-            if decision.speed_factor:
-                segment_duration = segment_duration / decision.speed_factor
-            
-            final_duration += segment_duration
+        # Keep segments that seem important
+        text = segment.text.lower().strip()
         
-        return final_duration
+        # Skip very short segments
+        if len(text) < 10:
+            return False
+        
+        # Skip segments that are mostly filler
+        filler_ratio = sum(1 for word in ['um', 'uh', 'like', 'you know', 'so', 'well'] if word in text) / max(1, len(text.split()))
+        if filler_ratio > 0.3:
+            return False
+        
+        # Keep segments with questions
+        if text.endswith('?'):
+            return True
+        
+        # Keep segments that seem like main content
+        important_words = ['important', 'key', 'main', 'first', 'second', 'next', 'finally', 'conclusion']
+        if any(word in text for word in important_words):
+            return True
+        
+        # Keep segments of reasonable length
+        if 5 <= len(text.split()) <= 50:
+            return True
+        
+        # Default: keep most segments (fallback is permissive)
+        return len(text.split()) > 3
     
-    def save_script(self, script: EditScript, output_path: str):
-        """Save edit script to JSON file"""
-        script_dict = asdict(script)
-        
-        # Convert enums to strings for JSON serialization
-        for cut in script_dict["cuts"]:
-            cut["action"] = cut["action"].value
-            cut["confidence"] = cut["confidence"].value
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(script_dict, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Edit script saved to: {output_path}")
+    def save_script(self, script: GeneratedScript, output_path: str):
+        """Save generated script to JSON file"""
+        try:
+            script_dict = asdict(script)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(script_dict, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Script saved to: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save script to {output_path}: {e}")
+            raise
 
-# Convenience function
-def generate_script(transcription: TranscriptionResult, 
-                   config: Optional[ScriptGenerationConfig] = None) -> EditScript:
-    """Simple interface for script generation"""
+# Convenience functions for easy use
+def generate_script_from_prompt(transcriptions: List[TranscriptionResult], 
+                               user_prompt: str,
+                               target_duration_minutes: int = 10,
+                               config: Optional[ScriptGenerationConfig] = None) -> GeneratedScript:
+    """
+    Simple interface for prompt-driven script generation
+    
+    Args:
+        transcriptions: List of transcription results (one per video)
+        user_prompt: User's instructions for what the video should be about
+        target_duration_minutes: Target duration in minutes
+        config: Optional configuration settings
+    
+    Returns:
+        GeneratedScript with full text and timeline data
+    """
     generator = SmartScriptGenerator(config)
-    return generator.generate_script(transcription)
+    return generator.generate_script_from_prompt(transcriptions, user_prompt, target_duration_minutes)
 
-# Example usage
+# Legacy compatibility function
+def generate_script(transcription: TranscriptionResult, 
+                   target_compression: float = 0.7,
+                   user_prompt: str = "Create an engaging video") -> GeneratedScript:
+    """
+    Legacy compatibility function - converts old interface to new
+    """
+    logger.warning("Using legacy generate_script function. Consider switching to generate_script_from_prompt")
+    
+    # Convert target_compression to target_duration
+    original_duration_minutes = transcription.metadata.get('total_duration', 600) / 60
+    target_duration = max(1, int(original_duration_minutes * target_compression))
+    
+    return generate_script_from_prompt([transcription], user_prompt, target_duration)
+
+# Example usage and testing
 if __name__ == "__main__":
+    print("Smart Edit Script Generation - Fixed Version")
+    print("=" * 50)
+    
+    # Test configuration
     config = ScriptGenerationConfig()
     generator = SmartScriptGenerator(config)
     
-    print("Script generation module ready!")
     print(f"AI enabled: {generator.ai_enabled}")
     print(f"Model: {config.model}")
-    print(f"Target compression: {config.target_compression}")
     print(f"API key configured: {'Yes' if config.openai_api_key else 'No'}")
+    
+    print("\nUsage:")
+    print("script = generate_script_from_prompt(transcriptions, 'Your prompt here', 10)")
+    print("print(script.full_text)  # Show the readable script")
+    print("print(len(script.segments))  # Show number of timeline segments")

@@ -66,7 +66,7 @@ class TranscriptionConfig:
         language: str = "auto",
         enable_speaker_detection: bool = True,
         enable_word_timestamps: bool = True,
-        model_size: str = "large-v3",
+        model_size: str = "base",
         device: str = "auto",
         filler_words: Optional[List[str]] = None
     ):
@@ -404,7 +404,7 @@ def transcribe_video(
 if __name__ == "__main__":
     config = TranscriptionConfig(
         accuracy_mode=True,
-        model_size="large-v3",
+        model_size="base",
         enable_word_timestamps=True
     )
     

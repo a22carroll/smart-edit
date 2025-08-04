@@ -1,7 +1,8 @@
 """
-XML Export Module for Smart Edit
+XML Export Module for Smart Edit - Updated for GeneratedScript
 
-Converts edit scripts to Premiere Pro XML format for both single cam and multicam workflows.
+Converts generated scripts to Premiere Pro XML format for both single cam and multicam workflows.
+Updated to support the new prompt-driven workflow with GeneratedScript objects.
 """
 
 import os
@@ -11,8 +12,23 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 
-# Import from our modules
-from script_generation import EditScript, CutDecision, EditAction
+# Updated imports for new workflow
+try:
+    from script_generation import GeneratedScript, ScriptSegment
+    # Keep backward compatibility for old workflow
+    from script_generation import EditScript, CutDecision, EditAction
+    HAS_OLD_SUPPORT = True
+except ImportError:
+    try:
+        from script_generation import GeneratedScript, ScriptSegment
+        HAS_OLD_SUPPORT = False
+    except ImportError:
+        # Fallback definitions for development
+        class GeneratedScript:
+            pass
+        class ScriptSegment:
+            pass
+        HAS_OLD_SUPPORT = False
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +57,7 @@ class TimecodeUtils:
         return frames / fps
 
 class PremiereXMLExporter:
-    """Handles XML export for Premiere Pro"""
+    """Handles XML export for Premiere Pro - Updated for GeneratedScript"""
     
     def __init__(self, fps: int = 30, width: int = 1920, height: int = 1080):
         self.fps = fps
@@ -49,18 +65,18 @@ class PremiereXMLExporter:
         self.height = height
         self.templates_dir = Path(__file__).parent / "templates"
     
-    def export_single_cam(
+    def export_generated_script_single_cam(
         self,
-        edit_script: EditScript,
+        generated_script: GeneratedScript,
         video_path: str,
         output_path: str,
         sequence_name: str = "SmartEdit_Timeline"
     ) -> bool:
         """
-        Export single camera edit script to Premiere XML
+        Export single camera generated script to Premiere XML
         
         Args:
-            edit_script: Edit decisions from script generation
+            generated_script: Generated script from prompt-driven workflow
             video_path: Path to source video file
             output_path: Where to save the XML file
             sequence_name: Name for the Premiere sequence
@@ -69,51 +85,51 @@ class PremiereXMLExporter:
             bool: Success status
         """
         try:
-            logger.info(f"Exporting single cam XML to: {output_path}")
+            logger.info(f"Exporting single cam generated script XML to: {output_path}")
             
-            # Generate clip items for kept segments
-            clipitems_xml = self._generate_single_cam_clips(edit_script, video_path)
-            audio_clips_xml = self._generate_audio_clips(edit_script, video_path)
+            # Get segments that should be kept
+            segments = getattr(generated_script, 'segments', [])
+            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
+            
+            if not selected_segments:
+                logger.warning("No segments selected for export")
+                return False
+            
+            # Generate clip items for selected segments
+            clipitems_xml = self._generate_single_cam_clips_from_generated_script(generated_script, video_path)
+            audio_clips_xml = self._generate_single_cam_audio_from_generated_script(generated_script, video_path)
             
             # Calculate final duration
-            final_duration_frames = TimecodeUtils.time_to_frames(
-                edit_script.estimated_final_duration, self.fps
-            )
+            estimated_duration = getattr(generated_script, 'estimated_duration_seconds', 600)
+            final_duration_frames = TimecodeUtils.time_to_frames(estimated_duration, self.fps)
             
-            # Load and fill template
-            xml_content = self._load_template("premiere_single.xml")
-            xml_output = xml_content.format(
-                sequence_name=sequence_name,
-                total_duration=final_duration_frames,
-                fps=self.fps,
-                width=self.width,
-                height=self.height,
-                clipitems=clipitems_xml,
-                audio_clips=audio_clips_xml
+            # Create XML content (simplified structure for now)
+            xml_content = self._create_basic_single_cam_xml(
+                sequence_name, final_duration_frames, clipitems_xml, audio_clips_xml
             )
             
             # Write output
-            self._write_xml_file(xml_output, output_path)
-            logger.info(f"✅ Single cam XML exported successfully")
+            self._write_xml_file(xml_content, output_path)
+            logger.info(f"✅ Single cam generated script XML exported successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to export single cam XML: {e}")
+            logger.error(f"Failed to export single cam generated script XML: {e}")
             return False
     
-    def export_multicam(
+    def export_generated_script_multicam(
         self,
-        edit_script: EditScript,
-        video_paths: Dict[str, str],  # {camera_id: file_path}
+        generated_script: GeneratedScript,
+        video_paths: List[str],  # List of video file paths
         output_path: str,
         sequence_name: str = "SmartEdit_Multicam"
     ) -> bool:
         """
-        Export multicam edit script to Premiere XML
+        Export multicam generated script to Premiere XML
         
         Args:
-            edit_script: Edit decisions from script generation
-            video_paths: Dictionary mapping camera IDs to file paths
+            generated_script: Generated script from prompt-driven workflow
+            video_paths: List of video file paths
             output_path: Where to save the XML file
             sequence_name: Name for the Premiere sequence
             
@@ -121,67 +137,56 @@ class PremiereXMLExporter:
             bool: Success status
         """
         try:
-            logger.info(f"Exporting multicam XML to: {output_path}")
+            logger.info(f"Exporting multicam generated script XML to: {output_path}")
             
-            # Generate source tracks for each camera
-            source_tracks_xml = self._generate_multicam_source_tracks(video_paths)
-            audio_tracks_xml = self._generate_multicam_audio_tracks(video_paths)
+            # Get segments that should be kept
+            segments = getattr(generated_script, 'segments', [])
+            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
             
-            # Generate edit decisions timeline
-            edit_decisions_xml = self._generate_multicam_edit_decisions(edit_script, video_paths)
-            audio_decisions_xml = self._generate_multicam_audio_decisions(edit_script, video_paths)
+            if not selected_segments:
+                logger.warning("No segments selected for export")
+                return False
             
-            # Calculate durations
-            total_duration_frames = TimecodeUtils.time_to_frames(
-                edit_script.original_duration, self.fps
-            )
-            final_duration_frames = TimecodeUtils.time_to_frames(
-                edit_script.estimated_final_duration, self.fps
-            )
+            # Generate multicam timeline
+            clipitems_xml = self._generate_multicam_clips_from_generated_script(generated_script, video_paths)
+            audio_clips_xml = self._generate_multicam_audio_from_generated_script(generated_script, video_paths)
             
-            # Load and fill template
-            xml_content = self._load_template("premiere_multicam.xml")
-            xml_output = xml_content.format(
-                sequence_name=sequence_name,
-                total_duration=total_duration_frames,
-                final_duration=final_duration_frames,
-                fps=self.fps,
-                width=self.width,
-                height=self.height,
-                source_tracks=source_tracks_xml,
-                audio_tracks=audio_tracks_xml,
-                edit_decisions=edit_decisions_xml,
-                audio_decisions=audio_decisions_xml
+            # Calculate final duration
+            estimated_duration = getattr(generated_script, 'estimated_duration_seconds', 600)
+            final_duration_frames = TimecodeUtils.time_to_frames(estimated_duration, self.fps)
+            
+            # Create XML content
+            xml_content = self._create_basic_multicam_xml(
+                sequence_name, final_duration_frames, clipitems_xml, audio_clips_xml, len(video_paths)
             )
             
             # Write output
-            self._write_xml_file(xml_output, output_path)
-            logger.info(f"✅ Multicam XML exported successfully")
+            self._write_xml_file(xml_content, output_path)
+            logger.info(f"✅ Multicam generated script XML exported successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to export multicam XML: {e}")
+            logger.error(f"Failed to export multicam generated script XML: {e}")
             return False
     
-    def _generate_single_cam_clips(self, edit_script: EditScript, video_path: str) -> str:
-        """Generate clip items for single camera timeline"""
+    def _generate_single_cam_clips_from_generated_script(self, generated_script: GeneratedScript, video_path: str) -> str:
+        """Generate clip items for single camera timeline from generated script"""
         clips_xml = ""
         timeline_position = 0
         
         video_path_abs = Path(video_path).absolute().as_posix()
+        segments = getattr(generated_script, 'segments', [])
+        selected_segments = [s for s in segments if getattr(s, 'keep', True)]
         
-        for i, cut in enumerate(edit_script.cuts):
-            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
-                continue
+        for i, segment in enumerate(selected_segments):
+            # Get segment timing
+            start_time = getattr(segment, 'start_time', 0.0)
+            end_time = getattr(segment, 'end_time', start_time + 5.0)  # Default 5 second duration
             
             # Calculate frame positions
-            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
-            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            source_in = TimecodeUtils.time_to_frames(start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(end_time, self.fps)
             duration = source_out - source_in
-            
-            # Apply speed factor if present
-            if cut.speed_factor and cut.speed_factor != 1.0:
-                duration = int(duration / cut.speed_factor)
             
             clip_id = f"clip_{i}_{uuid.uuid4().hex[:8]}"
             file_id = f"file_{i}"
@@ -200,7 +205,6 @@ class PremiereXMLExporter:
                 <timebase>{self.fps}</timebase>
                 <ntsc>FALSE</ntsc>
               </rate>
-              <duration>{TimecodeUtils.time_to_frames(edit_script.original_duration, self.fps)}</duration>
               <media>
                 <video>
                   <samplecharacteristics>
@@ -209,48 +213,30 @@ class PremiereXMLExporter:
                   </samplecharacteristics>
                 </video>
               </media>
-            </file>"""
-            
-            # Add speed effect if needed
-            if cut.speed_factor and cut.speed_factor != 1.0:
-                clips_xml += f"""
-            <filter>
-              <effect>
-                <name>Time Remap</name>
-                <effectid>timeremap</effectid>
-                <effecttype>motion</effecttype>
-                <mediatype>video</mediatype>
-                <parameter>
-                  <parameterid>speed</parameterid>
-                  <value>{cut.speed_factor * 100}</value>
-                </parameter>
-              </effect>
-            </filter>"""
-            
-            clips_xml += """
+            </file>
           </clipitem>"""
             
             timeline_position += duration
         
         return clips_xml
     
-    def _generate_audio_clips(self, edit_script: EditScript, video_path: str) -> str:
-        """Generate audio clips matching video clips"""
+    def _generate_single_cam_audio_from_generated_script(self, generated_script: GeneratedScript, video_path: str) -> str:
+        """Generate audio clips for single camera timeline from generated script"""
         clips_xml = ""
         timeline_position = 0
         
         video_path_abs = Path(video_path).absolute().as_posix()
+        segments = getattr(generated_script, 'segments', [])
+        selected_segments = [s for s in segments if getattr(s, 'keep', True)]
         
-        for i, cut in enumerate(edit_script.cuts):
-            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
-                continue
+        for i, segment in enumerate(selected_segments):
+            # Get segment timing
+            start_time = getattr(segment, 'start_time', 0.0)
+            end_time = getattr(segment, 'end_time', start_time + 5.0)
             
-            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
-            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            source_in = TimecodeUtils.time_to_frames(start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(end_time, self.fps)
             duration = source_out - source_in
-            
-            if cut.speed_factor and cut.speed_factor != 1.0:
-                duration = int(duration / cut.speed_factor)
             
             clip_id = f"audio_clip_{i}_{uuid.uuid4().hex[:8]}"
             
@@ -271,82 +257,27 @@ class PremiereXMLExporter:
         
         return clips_xml
     
-    def _generate_multicam_source_tracks(self, video_paths: Dict[str, str]) -> str:
-        """Generate source tracks for multicam sequence"""
-        tracks_xml = ""
-        
-        for track_idx, (camera_id, video_path) in enumerate(video_paths.items()):
-            video_path_abs = Path(video_path).absolute().as_posix()
-            clip_id = f"source_{camera_id}_{uuid.uuid4().hex[:8]}"
-            file_id = f"file_{camera_id}"
-            
-            tracks_xml += f"""
-        <track>
-          <clipitem id="{clip_id}">
-            <name>{camera_id}</name>
-            <start>0</start>
-            <end>{{total_duration}}</end>
-            <in>0</in>
-            <out>{{total_duration}}</out>
-            <file id="{file_id}">
-              <name>{camera_id}</name>
-              <pathurl>file://{video_path_abs}</pathurl>
-              <rate>
-                <timebase>{self.fps}</timebase>
-                <ntsc>FALSE</ntsc>
-              </rate>
-            </file>
-          </clipitem>
-        </track>"""
-        
-        return tracks_xml
-    
-    def _generate_multicam_audio_tracks(self, video_paths: Dict[str, str]) -> str:
-        """Generate audio tracks for multicam sequence"""
-        tracks_xml = ""
-        
-        for camera_id, video_path in video_paths.items():
-            video_path_abs = Path(video_path).absolute().as_posix()
-            clip_id = f"audio_source_{camera_id}_{uuid.uuid4().hex[:8]}"
-            
-            tracks_xml += f"""
-        <track>
-          <clipitem id="{clip_id}">
-            <name>{camera_id}_Audio</name>
-            <start>0</start>
-            <end>{{total_duration}}</end>
-            <in>0</in>
-            <out>{{total_duration}}</out>
-            <file id="file_{camera_id}">
-              <name>{camera_id}</name>
-              <pathurl>file://{video_path_abs}</pathurl>
-            </file>
-          </clipitem>
-        </track>"""
-        
-        return tracks_xml
-    
-    def _generate_multicam_edit_decisions(self, edit_script: EditScript, video_paths: Dict[str, str]) -> str:
-        """Generate edit decisions for multicam timeline"""
+    def _generate_multicam_clips_from_generated_script(self, generated_script: GeneratedScript, video_paths: List[str]) -> str:
+        """Generate multicam clips from generated script"""
         clips_xml = ""
         timeline_position = 0
-        camera_ids = list(video_paths.keys())
         
-        for i, cut in enumerate(edit_script.cuts):
-            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
-                continue
+        segments = getattr(generated_script, 'segments', [])
+        selected_segments = [s for s in segments if getattr(s, 'keep', True)]
+        
+        for i, segment in enumerate(selected_segments):
+            # Get segment timing and video index
+            start_time = getattr(segment, 'start_time', 0.0)
+            end_time = getattr(segment, 'end_time', start_time + 5.0)
+            video_index = getattr(segment, 'video_index', 0)
             
-            # Determine which camera angle to use
-            angle_id = 0  # Default to first camera
-            if hasattr(cut, 'camera_id') and cut.camera_id in camera_ids:
-                angle_id = camera_ids.index(cut.camera_id)
+            # Ensure video index is valid
+            if video_index >= len(video_paths):
+                video_index = 0
             
-            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
-            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            source_in = TimecodeUtils.time_to_frames(start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(end_time, self.fps)
             duration = source_out - source_in
-            
-            if cut.speed_factor and cut.speed_factor != 1.0:
-                duration = int(duration / cut.speed_factor)
             
             clip_id = f"multicam_clip_{i}_{uuid.uuid4().hex[:8]}"
             
@@ -359,7 +290,7 @@ class PremiereXMLExporter:
             <out>{source_out}</out>
             <multicam>
               <source>multicam-source</source>
-              <angle>{angle_id + 1}</angle>
+              <angle>{video_index + 1}</angle>
             </multicam>
           </clipitem>"""
             
@@ -367,21 +298,21 @@ class PremiereXMLExporter:
         
         return clips_xml
     
-    def _generate_multicam_audio_decisions(self, edit_script: EditScript, video_paths: Dict[str, str]) -> str:
-        """Generate audio decisions for multicam timeline"""
+    def _generate_multicam_audio_from_generated_script(self, generated_script: GeneratedScript, video_paths: List[str]) -> str:
+        """Generate multicam audio clips from generated script"""
         clips_xml = ""
         timeline_position = 0
         
-        for i, cut in enumerate(edit_script.cuts):
-            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
-                continue
+        segments = getattr(generated_script, 'segments', [])
+        selected_segments = [s for s in segments if getattr(s, 'keep', True)]
+        
+        for i, segment in enumerate(selected_segments):
+            start_time = getattr(segment, 'start_time', 0.0)
+            end_time = getattr(segment, 'end_time', start_time + 5.0)
             
-            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
-            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            source_in = TimecodeUtils.time_to_frames(start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(end_time, self.fps)
             duration = source_out - source_in
-            
-            if cut.speed_factor and cut.speed_factor != 1.0:
-                duration = int(duration / cut.speed_factor)
             
             clip_id = f"multicam_audio_{i}_{uuid.uuid4().hex[:8]}"
             
@@ -402,15 +333,97 @@ class PremiereXMLExporter:
         
         return clips_xml
     
-    def _load_template(self, template_name: str) -> str:
-        """Load XML template from templates directory"""
-        template_path = self.templates_dir / template_name
-        
-        if not template_path.exists():
-            raise FileNotFoundError(f"Template not found: {template_path}")
-        
-        with open(template_path, "r", encoding="utf-8") as f:
-            return f.read()
+    def _create_basic_single_cam_xml(self, sequence_name: str, duration_frames: int, clipitems_xml: str, audio_clips_xml: str) -> str:
+        """Create basic XML structure for single camera"""
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="5">
+  <project>
+    <name>{sequence_name}</name>
+    <children>
+      <sequence id="sequence-1">
+        <name>{sequence_name}</name>
+        <duration>{duration_frames}</duration>
+        <rate>
+          <timebase>{self.fps}</timebase>
+          <ntsc>FALSE</ntsc>
+        </rate>
+        <media>
+          <video>
+            <format>
+              <samplecharacteristics>
+                <width>{self.width}</width>
+                <height>{self.height}</height>
+                <rate>
+                  <timebase>{self.fps}</timebase>
+                  <ntsc>FALSE</ntsc>
+                </rate>
+              </samplecharacteristics>
+            </format>
+            <track>{clipitems_xml}
+            </track>
+          </video>
+          <audio>
+            <format>
+              <samplecharacteristics>
+                <depth>16</depth>
+                <samplerate>48000</samplerate>
+              </samplecharacteristics>
+            </format>
+            <track>{audio_clips_xml}
+            </track>
+          </audio>
+        </media>
+      </sequence>
+    </children>
+  </project>
+</xmeml>"""
+    
+    def _create_basic_multicam_xml(self, sequence_name: str, duration_frames: int, clipitems_xml: str, audio_clips_xml: str, camera_count: int) -> str:
+        """Create basic XML structure for multicam"""
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="5">
+  <project>
+    <name>{sequence_name}</name>
+    <children>
+      <sequence id="sequence-1">
+        <name>{sequence_name}</name>
+        <duration>{duration_frames}</duration>
+        <rate>
+          <timebase>{self.fps}</timebase>
+          <ntsc>FALSE</ntsc>
+        </rate>
+        <media>
+          <video>
+            <format>
+              <samplecharacteristics>
+                <width>{self.width}</width>
+                <height>{self.height}</height>
+                <rate>
+                  <timebase>{self.fps}</timebase>
+                  <ntsc>FALSE</ntsc>
+                </rate>
+              </samplecharacteristics>
+            </format>
+            <track>{clipitems_xml}
+            </track>
+          </video>
+          <audio>
+            <format>
+              <samplecharacteristics>
+                <depth>16</depth> 
+                <samplerate>48000</samplerate>
+              </samplecharacteristics>
+            </format>
+            <track>{audio_clips_xml}
+            </track>
+          </audio>
+        </media>
+      </sequence>
+    </children>
+  </project>
+</xmeml>"""
     
     def _write_xml_file(self, xml_content: str, output_path: str):
         """Write XML content to file"""
@@ -419,34 +432,178 @@ class PremiereXMLExporter:
         
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(xml_content)
+    
+    # Backward compatibility methods (keep old API working)
+    def export_single_cam(self, edit_script, video_path: str, output_path: str, sequence_name: str = "SmartEdit_Timeline") -> bool:
+        """Backward compatibility for old EditScript format"""
+        if not HAS_OLD_SUPPORT:
+            logger.error("Old EditScript format not supported in this version")
+            return False
+            
+        try:
+            # Generate clip items for kept segments
+            clipitems_xml = self._generate_single_cam_clips(edit_script, video_path)
+            audio_clips_xml = self._generate_audio_clips(edit_script, video_path)
+            
+            # Calculate final duration
+            final_duration_frames = TimecodeUtils.time_to_frames(
+                edit_script.estimated_final_duration, self.fps
+            )
+            
+            # Create XML content
+            xml_content = self._create_basic_single_cam_xml(
+                sequence_name, final_duration_frames, clipitems_xml, audio_clips_xml
+            )
+            
+            # Write output
+            self._write_xml_file(xml_content, output_path)
+            logger.info(f"✅ Single cam XML exported successfully (legacy mode)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export single cam XML (legacy): {e}")
+            return False
+    
+    def _generate_single_cam_clips(self, edit_script, video_path: str) -> str:
+        """Legacy method for old EditScript format"""
+        clips_xml = ""
+        timeline_position = 0
+        
+        video_path_abs = Path(video_path).absolute().as_posix()
+        
+        for i, cut in enumerate(edit_script.cuts):
+            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
+                continue
+            
+            # Calculate frame positions
+            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            duration = source_out - source_in
+            
+            # Apply speed factor if present
+            if hasattr(cut, 'speed_factor') and cut.speed_factor and cut.speed_factor != 1.0:
+                duration = int(duration / cut.speed_factor)
+            
+            clip_id = f"clip_{i}_{uuid.uuid4().hex[:8]}"
+            file_id = f"file_{i}"
+            
+            clips_xml += f"""
+          <clipitem id="{clip_id}">
+            <name>SmartEdit_Clip_{i+1}</name>
+            <start>{timeline_position}</start>
+            <end>{timeline_position + duration}</end>
+            <in>{source_in}</in>
+            <out>{source_out}</out>
+            <file id="{file_id}">
+              <name>{Path(video_path).stem}</name>
+              <pathurl>file://{video_path_abs}</pathurl>
+              <rate>
+                <timebase>{self.fps}</timebase>
+                <ntsc>FALSE</ntsc>
+              </rate>
+              <media>
+                <video>
+                  <samplecharacteristics>
+                    <width>{self.width}</width>
+                    <height>{self.height}</height>
+                  </samplecharacteristics>
+                </video>
+              </media>
+            </file>
+          </clipitem>"""
+            
+            timeline_position += duration
+        
+        return clips_xml
+    
+    def _generate_audio_clips(self, edit_script, video_path: str) -> str:
+        """Legacy method for old EditScript format"""
+        clips_xml = ""
+        timeline_position = 0
+        
+        video_path_abs = Path(video_path).absolute().as_posix()
+        
+        for i, cut in enumerate(edit_script.cuts):
+            if cut.action not in [EditAction.KEEP, EditAction.SPEED_UP]:
+                continue
+            
+            source_in = TimecodeUtils.time_to_frames(cut.start_time, self.fps)
+            source_out = TimecodeUtils.time_to_frames(cut.end_time, self.fps)
+            duration = source_out - source_in
+            
+            if hasattr(cut, 'speed_factor') and cut.speed_factor and cut.speed_factor != 1.0:
+                duration = int(duration / cut.speed_factor)
+            
+            clip_id = f"audio_clip_{i}_{uuid.uuid4().hex[:8]}"
+            
+            clips_xml += f"""
+          <clipitem id="{clip_id}">
+            <name>SmartEdit_Audio_{i+1}</name>
+            <start>{timeline_position}</start>
+            <end>{timeline_position + duration}</end>
+            <in>{source_in}</in>
+            <out>{source_out}</out>
+            <file id="file_{i}">
+              <name>{Path(video_path).stem}</name>
+              <pathurl>file://{video_path_abs}</pathurl>
+            </file>
+          </clipitem>"""
+            
+            timeline_position += duration
+        
+        return clips_xml
 
-# Convenience functions
-def export_single_cam_xml(
-    edit_script: EditScript,
-    video_path: str,
+# Updated convenience functions for new workflow
+def export_generated_script_xml(
+    generated_script: GeneratedScript,
+    video_paths: Union[str, List[str]],  # Single path or list of paths
     output_path: str,
     fps: int = 30,
     sequence_name: str = "SmartEdit_Timeline"
 ) -> bool:
-    """Export single camera edit to Premiere XML"""
+    """
+    Export generated script to Premiere XML (works for single cam or multicam)
+    
+    Args:
+        generated_script: Generated script from prompt-driven workflow
+        video_paths: Single video path (str) or list of video paths for multicam
+        output_path: Where to save the XML file
+        fps: Frame rate for timeline
+        sequence_name: Name for the Premiere sequence
+        
+    Returns:
+        bool: Success status
+    """
+    exporter = PremiereXMLExporter(fps=fps)
+    
+    # Handle both single string and list of strings
+    if isinstance(video_paths, str):
+        video_paths = [video_paths]
+    
+    if len(video_paths) == 1:
+        return exporter.export_generated_script_single_cam(
+            generated_script, video_paths[0], output_path, sequence_name
+        )
+    else:
+        return exporter.export_generated_script_multicam(
+            generated_script, video_paths, output_path, sequence_name
+        )
+
+# Legacy convenience functions (backward compatibility)
+def export_single_cam_xml(edit_script, video_path: str, output_path: str, fps: int = 30, sequence_name: str = "SmartEdit_Timeline") -> bool:
+    """Export single camera edit to Premiere XML (legacy)"""
     exporter = PremiereXMLExporter(fps=fps)
     return exporter.export_single_cam(edit_script, video_path, output_path, sequence_name)
 
-def export_multicam_xml(
-    edit_script: EditScript,
-    video_paths: Dict[str, str],
-    output_path: str,
-    fps: int = 30,
-    sequence_name: str = "SmartEdit_Multicam"
-) -> bool:
-    """Export multicam edit to Premiere XML"""
-    exporter = PremiereXMLExporter(fps=fps)
-    return exporter.export_multicam(edit_script, video_paths, output_path, sequence_name)
+def export_multicam_xml(edit_script, video_paths: Dict[str, str], output_path: str, fps: int = 30, sequence_name: str = "SmartEdit_Multicam") -> bool:
+    """Export multicam edit to Premiere XML (legacy)"""
+    logger.warning("Legacy multicam export not fully implemented for old EditScript format")
+    return False
 
 # Example usage
 if __name__ == "__main__":
-    # This would typically be used with real edit scripts
-    print("XML Export module ready!")
+    print("XML Export module ready! (Updated for GeneratedScript)")
     print("Available functions:")
-    print("- export_single_cam_xml()")
-    print("- export_multicam_xml()")
+    print("- export_generated_script_xml() - NEW: For prompt-driven workflow")
+    print("- export_single_cam_xml() - Legacy: For old EditScript format")
+    print("- export_multicam_xml() - Legacy: Limited support")

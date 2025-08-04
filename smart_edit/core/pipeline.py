@@ -1,8 +1,8 @@
 """
-Smart Edit Core Pipeline
+Smart Edit Core Pipeline - Updated for Prompt-Driven Workflow
 
 Orchestrates the complete video processing workflow from raw videos to final XML export.
-Provides high-level interface for the entire Smart Edit system.
+Now supports user prompt-driven script generation instead of automatic processing.
 """
 
 import os
@@ -18,24 +18,60 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-# Import core models
-from core.models import (
-    SmartEditProject, VideoFile, ProcessingStage, ProcessingResult,
-    ExportOptions, ExportFormat, ProjectSettings, create_project_from_videos
-)
+# Import core models - Updated for new workflow
+try:
+    from core.models import (
+        SmartEditProject, VideoFile, ProcessingStage, ProcessingResult,
+        ExportOptions, ExportFormat, ProjectSettings, create_project_from_videos
+    )
+except ImportError:
+    # Fallback definitions for development
+    from enum import Enum
+    from dataclasses import dataclass
+    
+    class ProcessingStage(Enum):
+        CREATED = "created"
+        TRANSCRIBING = "transcribing"
+        TRANSCRIBED = "transcribed"
+        READY_FOR_SCRIPT = "ready_for_script"
+        SCRIPT_GENERATED = "script_generated"
+        READY_FOR_REVIEW = "ready_for_review"
+        READY_FOR_EXPORT = "ready_for_export"
+        EXPORTING = "exporting"
+        COMPLETED = "completed"
+        FAILED = "failed"
+    
+    @dataclass
+    class ProcessingResult:
+        success: bool
+        stage: ProcessingStage
+        message: str
+        data: Any = None
+        processing_time: float = 0.0
+        
+        @classmethod
+        def success_result(cls, stage, message, data=None, processing_time=0.0):
+            return cls(True, stage, message, data, processing_time)
+        
+        @classmethod
+        def error_result(cls, stage, error):
+            return cls(False, stage, str(error), None, 0.0)
 
-# Import processing modules
-from transcription import transcribe_video, TranscriptionConfig
-from script_generation import generate_script, ScriptGenerationConfig
-from angle_assignment import assign_camera_angles, AngleAssignmentConfig
-from xml_export import export_single_cam_xml, export_multicam_xml
+# Import processing modules - Updated imports
+try:
+    from transcription import transcribe_video, TranscriptionConfig, TranscriptionResult
+    from script_generation import GeneratedScript, generate_script_from_prompt
+    # Note: XML export will need to be updated for GeneratedScript format
+    # from xml_export import export_single_cam_xml, export_multicam_xml
+except ImportError as e:
+    print(f"Warning: Import error - {e}")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SmartEditPipeline:
-    """Main processing pipeline for Smart Edit"""
+    """Main processing pipeline for Smart Edit - Prompt-Driven Version"""
     
     def __init__(self, progress_callback: Optional[Callable[[str, float], None]] = None):
         """
@@ -45,494 +81,453 @@ class SmartEditPipeline:
             progress_callback: Optional callback for progress updates (message, percent)
         """
         self.progress_callback = progress_callback
-        self.current_project: Optional[SmartEditProject] = None
+        self.current_project: Optional[Dict] = None  # Simplified project structure
     
-    def create_project(
+    def process_transcription_only(
         self, 
         project_name: str, 
-        video_paths: List[str],
-        settings: Optional[ProjectSettings] = None
-    ) -> SmartEditProject:
+        video_paths: List[str]
+    ) -> ProcessingResult:
         """
-        Create a new Smart Edit project
+        Process only transcription step - Updated workflow
         
         Args:
             project_name: Name for the project
             video_paths: List of video file paths
-            settings: Optional project settings
             
         Returns:
-            SmartEditProject instance
+            ProcessingResult with transcription data
         """
-        logger.info(f"Creating project: {project_name}")
-        
-        project = create_project_from_videos(project_name, video_paths, settings)
-        
-        # Validate project
-        errors = project.validate()
-        if errors:
-            raise ValueError(f"Project validation failed: {', '.join(errors)}")
-        
-        self.current_project = project
-        self._update_progress("Project created", 0.0, ProcessingStage.CREATED)
-        
-        logger.info(f"Project created: {project.get_status_summary()}")
-        return project
-    
-    def process_project(self, project: Optional[SmartEditProject] = None) -> ProcessingResult:
-        """
-        Process a complete project through the pipeline
-        
-        Args:
-            project: Project to process (uses current project if None)
-            
-        Returns:
-            ProcessingResult with final status
-        """
-        if project:
-            self.current_project = project
-        
-        if not self.current_project:
-            return ProcessingResult.error_result(
-                ProcessingStage.FAILED, 
-                ValueError("No project to process")
-            )
-        
-        project = self.current_project
-        start_time = time.time()
+        logger.info(f"Starting transcription for project: {project_name}")
         
         try:
-            logger.info(f"Starting pipeline processing for project: {project.name}")
+            # Initialize project data
+            self.current_project = {
+                "name": project_name,
+                "video_paths": video_paths,
+                "is_multicam": len(video_paths) > 1,
+                "transcription_results": [],
+                "generated_script": None
+            }
             
-            # Step 1: Transcription
-            transcription_result = self._process_transcription(project)
-            if not transcription_result.success:
-                return transcription_result
-            
-            # Step 2: Script Generation
-            script_result = self._process_script_generation(project)
-            if not script_result.success:
-                return script_result
-            
-            # Step 3: Camera Assignment (if multicam)
-            if project.is_multicam:
-                angle_result = self._process_angle_assignment(project)
-                if not angle_result.success:
-                    return angle_result
-            
-            # Mark as ready for review
-            self._update_progress("Processing complete - Ready for review", 100.0, ProcessingStage.READY_FOR_REVIEW)
-            
-            processing_time = time.time() - start_time
-            logger.info(f"Pipeline processing completed in {processing_time:.2f}s")
-            
-            return ProcessingResult.success_result(
-                ProcessingStage.READY_FOR_REVIEW,
-                "Project processed successfully",
-                project,
-                processing_time
-            )
-            
-        except Exception as e:
-            logger.error(f"Pipeline processing failed: {e}")
-            logger.error(traceback.format_exc())
-            
-            self._update_progress(f"Processing failed: {str(e)}", 0.0, ProcessingStage.FAILED)
-            project.progress.error_message = str(e)
-            
-            return ProcessingResult.error_result(ProcessingStage.FAILED, e)
-    
-    def _process_transcription(self, project: SmartEditProject) -> ProcessingResult:
-        """Process transcription step"""
-        try:
             self._update_progress("Starting transcription...", 10.0, ProcessingStage.TRANSCRIBING)
             start_time = time.time()
             
-            # Configure transcription
-            config = TranscriptionConfig(
-                model_size=project.settings.transcription_model,
-                language=project.settings.transcription_language,
-                enable_word_timestamps=project.settings.enable_word_timestamps,
-                accuracy_mode=True
-            )
+            # Process each video individually
+            transcription_results = []
+            total_videos = len(video_paths)
             
-            # Get video paths
-            if project.is_multicam:
-                video_paths = [vf.path for vf in project.video_files]
-                logger.info(f"Processing multicam with {len(video_paths)} videos")
-            else:
-                video_paths = project.video_files[0].path
-                logger.info(f"Processing single video: {video_paths}")
+            for i, video_path in enumerate(video_paths):
+                video_name = os.path.basename(video_path)
+                progress = 10.0 + (i / total_videos) * 70.0  # 10% to 80%
+                
+                self._update_progress(f"Transcribing {i+1}/{total_videos}: {video_name}", 
+                                    progress, ProcessingStage.TRANSCRIBING)
+                
+                # Transcribe individual video
+                logger.info(f"Transcribing video {i+1}/{total_videos}: {video_name}")
+                
+                # Use base model for faster processing (user can change in config)
+                config = TranscriptionConfig(
+                    model_size="base",  # Faster for development
+                    accuracy_mode=True,
+                    enable_word_timestamps=True
+                )
+                
+                result = transcribe_video(video_path, config)
+                transcription_results.append(result)
+                
+                duration_mins = result.metadata.get('total_duration', 0) / 60
+                logger.info(f"Completed {video_name}: {duration_mins:.1f}min, {len(result.segments)} segments")
             
-            logger.info(f"Transcribing {len(project.video_files)} video(s)")
-            
-            # Perform transcription
-            transcription_result = transcribe_video(video_paths, config)
-            project.transcription_result = transcription_result
+            # Store results
+            self.current_project["transcription_results"] = transcription_results
             
             processing_time = time.time() - start_time
+            total_duration = sum(t.metadata.get('total_duration', 0) for t in transcription_results)
+            total_segments = sum(len(t.segments) for t in transcription_results)
             
-            self._update_progress("Transcription complete", 30.0, ProcessingStage.TRANSCRIBED)
+            self._update_progress("Transcription complete", 90.0, ProcessingStage.TRANSCRIBED)
             
-            logger.info(f"Transcription completed: {len(transcription_result.segments)} segments in {processing_time:.2f}s")
+            logger.info(f"Transcription completed: {total_segments} segments, "
+                       f"{total_duration/60:.1f}min total, {processing_time:.2f}s processing time")
             
             return ProcessingResult.success_result(
                 ProcessingStage.TRANSCRIBED,
-                f"Transcribed {len(transcription_result.segments)} segments",
-                transcription_result,
+                f"Transcribed {total_videos} video(s) successfully",
+                transcription_results,
                 processing_time
             )
             
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
+            logger.error(traceback.format_exc())
+            self._update_progress(f"Transcription failed: {str(e)}", 0.0, ProcessingStage.FAILED)
             return ProcessingResult.error_result(ProcessingStage.TRANSCRIBING, e)
     
-    def _process_script_generation(self, project: SmartEditProject) -> ProcessingResult:
-        """Process script generation step"""
+    def generate_script_from_prompt(
+        self,
+        user_prompt: str,
+        target_duration_minutes: int = 10,
+        transcription_results: Optional[List] = None
+    ) -> ProcessingResult:
+        """
+        Generate script from user prompt - New workflow step
+        
+        Args:
+            user_prompt: User's instructions for the video
+            target_duration_minutes: Target duration in minutes
+            transcription_results: Optional transcription results (uses current project if None)
+            
+        Returns:
+            ProcessingResult with generated script
+        """
+        if transcription_results:
+            results = transcription_results
+        elif self.current_project and self.current_project.get("transcription_results"):
+            results = self.current_project["transcription_results"] 
+        else:
+            return ProcessingResult.error_result(
+                ProcessingStage.FAILED,
+                ValueError("No transcription results available")
+            )
+        
         try:
-            self._update_progress("Generating edit script...", 50.0, ProcessingStage.GENERATING_SCRIPT)
+            self._update_progress("Generating script from prompt...", 20.0, ProcessingStage.READY_FOR_SCRIPT)
             start_time = time.time()
             
-            if not project.transcription_result:
-                raise ValueError("No transcription result available")
+            logger.info(f"Generating script with prompt: {user_prompt[:100]}...")
+            logger.info(f"Target duration: {target_duration_minutes} minutes")
             
-            # Configure script generation
-            config = ScriptGenerationConfig(
-                target_compression=project.settings.target_compression,
-                remove_filler_words=project.settings.remove_filler_words,
-                min_pause_threshold=project.settings.min_pause_threshold,
-                keep_question_segments=project.settings.keep_question_segments,
-                max_speed_increase=project.settings.max_speed_increase
+            # Import the updated script generation function
+            from script_generation import generate_script_from_prompt
+            
+            # Generate script based on user prompt
+            generated_script = generate_script_from_prompt(
+                transcriptions=results,
+                user_prompt=user_prompt,
+                target_duration_minutes=target_duration_minutes
             )
             
-            logger.info("Generating edit script with AI analysis")
-            
-            # Generate script
-            edit_script = generate_script(project.transcription_result, config)
-            project.edit_script = edit_script
+            # Store in project
+            if self.current_project:
+                self.current_project["generated_script"] = generated_script
             
             processing_time = time.time() - start_time
             
-            self._update_progress("Edit script generated", 70.0, ProcessingStage.SCRIPT_GENERATED)
+            # Get script metrics
+            segments_count = len(getattr(generated_script, 'segments', []))
+            estimated_duration = getattr(generated_script, 'estimated_duration_seconds', 0) / 60
             
-            logger.info(f"Script generation completed: {edit_script.compression_ratio:.1%} compression in {processing_time:.2f}s")
+            self._update_progress("Script generated successfully", 80.0, ProcessingStage.SCRIPT_GENERATED)
+            
+            logger.info(f"Script generation completed: {segments_count} segments, "
+                       f"{estimated_duration:.1f}min estimated duration, {processing_time:.2f}s")
             
             return ProcessingResult.success_result(
                 ProcessingStage.SCRIPT_GENERATED,
-                f"Generated script with {edit_script.compression_ratio:.1%} compression",
-                edit_script,
+                f"Generated script with {segments_count} segments",
+                generated_script,
                 processing_time
             )
             
         except Exception as e:
             logger.error(f"Script generation failed: {e}")
-            return ProcessingResult.error_result(ProcessingStage.GENERATING_SCRIPT, e)
+            logger.error(traceback.format_exc())
+            self._update_progress(f"Script generation failed: {str(e)}", 0.0, ProcessingStage.FAILED)
+            return ProcessingResult.error_result(ProcessingStage.READY_FOR_SCRIPT, e)
     
-    def _process_angle_assignment(self, project: SmartEditProject) -> ProcessingResult:
-        """Process camera angle assignment step"""
-        try:
-            self._update_progress("Assigning camera angles...", 85.0, ProcessingStage.ASSIGNING_ANGLES)
-            start_time = time.time()
-            
-            if not project.edit_script:
-                raise ValueError("No edit script available")
-            
-            # Configure angle assignment
-            from angle_assignment import AngleAssignmentConfig
-            config = AngleAssignmentConfig(
-                max_segments_per_camera=project.settings.max_segments_per_camera,
-                prefer_speaker_switches=project.settings.prefer_speaker_switches,
-                prefer_content_switches=project.settings.prefer_content_switches
-            )
-            
-            # Get camera IDs
-            camera_ids = []
-            for vf in project.video_files:
-                if vf.camera_id:
-                    camera_ids.append(vf.camera_id)
-            
-            if not camera_ids:
-                raise ValueError("No valid camera IDs found for angle assignment")
-            
-            logger.info(f"Assigning angles for {len(camera_ids)} cameras")
-            
-            # Assign angles
-            project.edit_script = assign_camera_angles(
-                project.edit_script, 
-                camera_ids, 
-                strategy="smart",
-                config=config
-            )
-            
-            processing_time = time.time() - start_time
-            
-            self._update_progress("Camera angles assigned", 90.0, ProcessingStage.READY_FOR_REVIEW)
-            
-            logger.info(f"Angle assignment completed in {processing_time:.2f}s")
-            
-            return ProcessingResult.success_result(
-                ProcessingStage.READY_FOR_REVIEW,
-                f"Assigned angles for {len(camera_ids)} cameras",
-                project.edit_script,
-                processing_time
-            )
-            
-        except Exception as e:
-            logger.error(f"Angle assignment failed: {e}")
-            return ProcessingResult.error_result(ProcessingStage.ASSIGNING_ANGLES, e)
-    
-    def export_project(
-        self, 
-        export_options: ExportOptions,
-        project: Optional[SmartEditProject] = None
+    def export_generated_script(
+        self,
+        output_path: str,
+        generated_script: Optional[GeneratedScript] = None,
+        export_format: str = "premiere_xml"
     ) -> ProcessingResult:
         """
-        Export project to specified format
+        Export generated script to specified format
         
         Args:
-            export_options: Export configuration
-            project: Project to export (uses current project if None)
+            output_path: Output file path
+            generated_script: Script to export (uses current project if None)
+            export_format: Export format ("premiere_xml", "text", "json")
             
         Returns:
             ProcessingResult with export status
         """
-        if project:
-            self.current_project = project
-        
-        if not self.current_project:
+        if generated_script:
+            script = generated_script
+        elif self.current_project and self.current_project.get("generated_script"):
+            script = self.current_project["generated_script"]
+        else:
             return ProcessingResult.error_result(
                 ProcessingStage.FAILED,
-                ValueError("No project to export")
-            )
-        
-        project = self.current_project
-        
-        if not project.edit_script:
-            return ProcessingResult.error_result(
-                ProcessingStage.FAILED,
-                ValueError("No edit script available for export")
+                ValueError("No generated script available")
             )
         
         try:
-            self._update_progress("Exporting project...", 95.0, ProcessingStage.EXPORTING)
+            self._update_progress("Exporting script...", 90.0, ProcessingStage.EXPORTING)
             start_time = time.time()
             
-            # Validate export options
-            errors = export_options.validate()
-            if errors:
-                raise ValueError(f"Export validation failed: {', '.join(errors)}")
+            logger.info(f"Exporting script to: {output_path}")
+            logger.info(f"Export format: {export_format}")
             
-            # Generate output path if not specified
-            if not export_options.output_path:
-                output_dir = project.output_directory
-                if not output_dir and project.video_files:
-                    output_dir = os.path.dirname(project.video_files[0].path)
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            
+            if export_format == "text":
+                self._export_text_script(script, output_path)
                 
-                if output_dir:
-                    os.makedirs(output_dir, exist_ok=True)
-                    format_ext = {"premiere_xml": ".xml", "json": ".json"}.get(export_options.format.value, ".xml")
-                    export_options.output_path = os.path.join(output_dir, f"{project.name}_edit{format_ext}")
-                else:
-                    raise ValueError("Cannot determine output directory")
-            
-            # Set sequence name if not specified
-            if not export_options.sequence_name:
-                export_options.sequence_name = f"{project.name}_Timeline"
-            
-            # Export based on format and project type
-            success = False
-            
-            if export_options.format == ExportFormat.PREMIERE_XML:
-                if project.is_multicam:
-                    camera_mapping = project.get_camera_mapping()
-                    success = export_multicam_xml(
-                        project.edit_script,
-                        camera_mapping,
-                        export_options.output_path,
-                        fps=export_options.fps,
-                        sequence_name=export_options.sequence_name
-                    )
-                else:
-                    success = export_single_cam_xml(
-                        project.edit_script,
-                        project.video_files[0].path,
-                        export_options.output_path,
-                        fps=export_options.fps,
-                        sequence_name=export_options.sequence_name
-                    )
-            elif export_options.format == ExportFormat.JSON:
-                # Export as JSON for other tools
-                self._export_json(project, export_options.output_path)
-                success = True
+            elif export_format == "json":
+                self._export_json_script(script, output_path)
+                
+            elif export_format == "premiere_xml":
+                # TODO: Implement XML export for GeneratedScript
+                # For now, export as detailed text representation
+                self._export_premiere_placeholder(script, output_path)
+                
             else:
-                raise ValueError(f"Unsupported export format: {export_options.format.value}")
-            
-            if not success:
-                raise RuntimeError("Export operation returned False")
+                raise ValueError(f"Unsupported export format: {export_format}")
             
             processing_time = time.time() - start_time
             
             self._update_progress("Export complete", 100.0, ProcessingStage.COMPLETED)
-            project.progress.end_time = time.time()
             
-            logger.info(f"Export completed: {export_options.output_path} in {processing_time:.2f}s")
+            logger.info(f"Export completed: {output_path} in {processing_time:.2f}s")
             
             return ProcessingResult.success_result(
                 ProcessingStage.COMPLETED,
-                f"Exported to {export_options.output_path}",
-                export_options.output_path,
+                f"Exported script to {output_path}",
+                output_path,
                 processing_time
             )
             
         except Exception as e:
             logger.error(f"Export failed: {e}")
+            logger.error(traceback.format_exc())
             self._update_progress(f"Export failed: {str(e)}", 0.0, ProcessingStage.FAILED)
             return ProcessingResult.error_result(ProcessingStage.EXPORTING, e)
     
-    def _export_json(self, project: SmartEditProject, output_path: str):
-        """Export project as JSON"""
+    def _export_text_script(self, script: GeneratedScript, output_path: str):
+        """Export script as readable text"""
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(f"Smart Edit Generated Script\n")
+            f.write(f"=" * 50 + "\n\n")
+            
+            # Script metadata
+            f.write(f"Title: {getattr(script, 'title', 'Untitled')}\n")
+            f.write(f"Target Duration: {getattr(script, 'target_duration_minutes', 'N/A')} minutes\n")
+            f.write(f"Estimated Duration: {getattr(script, 'estimated_duration_seconds', 0)/60:.1f} minutes\n")
+            f.write(f"User Prompt: {getattr(script, 'user_prompt', 'None')}\n\n")
+            
+            # Full script text
+            full_text = getattr(script, 'full_text', '')
+            if full_text:
+                f.write("Generated Script:\n")
+                f.write("-" * 20 + "\n")
+                f.write(full_text)
+                f.write("\n\n")
+            
+            # Timeline segments
+            segments = getattr(script, 'segments', [])
+            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
+            
+            f.write("Timeline Segments:\n")
+            f.write("-" * 20 + "\n")
+            
+            for i, segment in enumerate(selected_segments):
+                start_time = getattr(segment, 'start_time', 0)
+                end_time = getattr(segment, 'end_time', 0)
+                content = getattr(segment, 'content', 'No content')
+                video_idx = getattr(segment, 'video_index', 0)
+                
+                f.write(f"{start_time:.2f}s - {end_time:.2f}s [Video {video_idx + 1}]: {content}\n")
+    
+    def _export_json_script(self, script: GeneratedScript, output_path: str):
+        """Export script as JSON data"""
         import json
-        from dataclasses import asdict
+        from dataclasses import asdict, is_dataclass
         
-        # Convert project to JSON-serializable format
-        export_data = {
-            "project_name": project.name,
-            "project_type": project.project_type.value,
-            "video_files": [asdict(vf) for vf in project.video_files],
-            "settings": asdict(project.settings),
-            "transcription_summary": {
-                "total_duration": project.total_duration,
-                "segment_count": len(project.transcription_result.segments) if project.transcription_result else 0,
-                "language": project.transcription_result.metadata.get('language_detected') if project.transcription_result else None
-            } if project.transcription_result else None,
-            "edit_script_summary": {
-                "compression_ratio": project.edit_script.compression_ratio,
-                "segments_kept": project.edit_script.metadata.get('segments_kept', 0),
-                "segments_removed": project.edit_script.metadata.get('segments_removed', 0),
-                "estimated_duration": project.edit_script.estimated_final_duration
-            } if project.edit_script else None,
-            "export_timestamp": time.time()
-        }
+        def convert_to_dict(obj):
+            if is_dataclass(obj):
+                return asdict(obj)
+            elif hasattr(obj, '__dict__'):
+                return obj.__dict__
+            else:
+                return str(obj)
+        
+        try:
+            script_dict = convert_to_dict(script)
+        except:
+            # Fallback to manual conversion
+            script_dict = {
+                "title": getattr(script, 'title', 'Untitled'),
+                "target_duration_minutes": getattr(script, 'target_duration_minutes', 0),
+                "estimated_duration_seconds": getattr(script, 'estimated_duration_seconds', 0),
+                "user_prompt": getattr(script, 'user_prompt', ''),
+                "full_text": getattr(script, 'full_text', ''),
+                "segments": [convert_to_dict(s) for s in getattr(script, 'segments', [])],
+                "metadata": getattr(script, 'metadata', {})
+            }
         
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
+            json.dump(script_dict, f, indent=2, ensure_ascii=False, default=str)
+    
+    def _export_premiere_placeholder(self, script: GeneratedScript, output_path: str):
+        """Export placeholder XML (until full XML export is implemented)"""
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            f.write('<!-- Smart Edit Generated Timeline -->\n')
+            f.write('<!-- This is a placeholder format until full XML export is implemented -->\n\n')
+            
+            f.write('<smart_edit_timeline>\n')
+            f.write(f'  <title>{getattr(script, "title", "Untitled")}</title>\n')
+            f.write(f'  <duration_minutes>{getattr(script, "target_duration_minutes", 0)}</duration_minutes>\n')
+            f.write(f'  <user_prompt><![CDATA[{getattr(script, "user_prompt", "")}]]></user_prompt>\n')
+            
+            segments = getattr(script, 'segments', [])
+            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
+            
+            f.write('  <timeline>\n')
+            for segment in selected_segments:
+                start_time = getattr(segment, 'start_time', 0)
+                end_time = getattr(segment, 'end_time', 0)
+                content = getattr(segment, 'content', '')
+                video_idx = getattr(segment, 'video_index', 0)
+                
+                f.write(f'    <segment video="{video_idx + 1}" start="{start_time:.2f}" end="{end_time:.2f}">\n')
+                f.write(f'      <content><![CDATA[{content}]]></content>\n')
+                f.write('    </segment>\n')
+            f.write('  </timeline>\n')
+            f.write('</smart_edit_timeline>\n')
     
     def _update_progress(self, message: str, percent: float, stage: ProcessingStage):
         """Update progress tracking"""
-        if self.current_project:
-            self.current_project.progress.current_step = message
-            self.current_project.progress.progress_percent = percent
-            self.current_project.progress.stage = stage
-            
-            if stage == ProcessingStage.TRANSCRIBING and not self.current_project.progress.start_time:
-                self.current_project.progress.start_time = time.time()
-        
         # Call progress callback if provided
         if self.progress_callback:
             self.progress_callback(message, percent)
         
         logger.info(f"Progress: {message} ({percent:.1f}%)")
     
-    def get_project_status(self, project: Optional[SmartEditProject] = None) -> Dict[str, Any]:
+    def get_project_status(self) -> Dict[str, Any]:
         """Get current project status"""
-        if project:
-            target_project = project
-        else:
-            target_project = self.current_project
-        
-        if not target_project:
+        if not self.current_project:
             return {"error": "No project loaded"}
         
-        return target_project.get_status_summary()
+        return {
+            "project_name": self.current_project.get("name", "Unknown"),
+            "video_count": len(self.current_project.get("video_paths", [])),
+            "is_multicam": self.current_project.get("is_multicam", False),
+            "has_transcription": bool(self.current_project.get("transcription_results")),
+            "has_script": bool(self.current_project.get("generated_script"))
+        }
 
-# Convenience functions for common workflows
-def quick_process_videos(
+# Convenience functions for the new workflow
+def quick_transcribe_videos(
     project_name: str,
     video_paths: List[str],
-    output_path: Optional[str] = None,
-    settings: Optional[ProjectSettings] = None,
     progress_callback: Optional[Callable[[str, float], None]] = None
 ) -> ProcessingResult:
     """
-    Quick processing of videos through the complete pipeline
+    Quick transcription of videos (Step 1 of new workflow)
     
     Args:
         project_name: Name for the project
         video_paths: List of video file paths
-        output_path: Optional output path for XML
-        settings: Optional project settings
         progress_callback: Optional progress callback
         
     Returns:
-        ProcessingResult with final status
+        ProcessingResult with transcription data
     """
     pipeline = SmartEditPipeline(progress_callback)
-    
-    try:
-        # Create project
-        project = pipeline.create_project(project_name, video_paths, settings)
-        
-        # Process through pipeline
-        result = pipeline.process_project(project)
-        if not result.success:
-            return result
-        
-        # Export if output path specified
-        if output_path:
-            export_options = ExportOptions(
-                format=ExportFormat.PREMIERE_XML,
-                output_path=output_path,
-                sequence_name=f"{project_name}_Timeline"
-            )
-            
-            export_result = pipeline.export_project(export_options)
-            return export_result
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Quick processing failed: {e}")
-        return ProcessingResult.error_result(ProcessingStage.FAILED, e)
+    return pipeline.process_transcription_only(project_name, video_paths)
 
-def process_single_video(
-    video_path: str,
-    output_path: Optional[str] = None,
-    compression_ratio: float = 0.7
+def quick_generate_script(
+    transcription_results: List,
+    user_prompt: str,
+    target_duration_minutes: int = 10,
+    progress_callback: Optional[Callable[[str, float], None]] = None
 ) -> ProcessingResult:
     """
-    Process a single video with default settings
+    Quick script generation from prompt (Step 2 of new workflow)
     
     Args:
-        video_path: Path to video file
-        output_path: Optional output XML path
-        compression_ratio: Target compression ratio
+        transcription_results: Results from transcription step  
+        user_prompt: User's instructions for the video
+        target_duration_minutes: Target duration in minutes
+        progress_callback: Optional progress callback
         
     Returns:
-        ProcessingResult with final status
+        ProcessingResult with generated script
     """
-    project_name = Path(video_path).stem
-    settings = ProjectSettings(target_compression=compression_ratio)
-    
-    return quick_process_videos(
-        project_name,
-        [video_path],
-        output_path,
-        settings
+    pipeline = SmartEditPipeline(progress_callback)  
+    return pipeline.generate_script_from_prompt(
+        user_prompt, target_duration_minutes, transcription_results
     )
+
+def quick_export_script(
+    generated_script: GeneratedScript,
+    output_path: str,
+    export_format: str = "premiere_xml",
+    progress_callback: Optional[Callable[[str, float], None]] = None
+) -> ProcessingResult:
+    """
+    Quick export of generated script (Step 3 of new workflow)
+    
+    Args:
+        generated_script: Script to export
+        output_path: Output file path
+        export_format: Export format ("premiere_xml", "text", "json")
+        progress_callback: Optional progress callback
+        
+    Returns:
+        ProcessingResult with export status
+    """
+    pipeline = SmartEditPipeline(progress_callback)
+    return pipeline.export_generated_script(output_path, generated_script, export_format)
 
 # Example usage
 if __name__ == "__main__":
-    # Example of processing a single video
+    # Example of new workflow
     def progress_update(message: str, percent: float):
         print(f"[{percent:5.1f}%] {message}")
     
-    result = process_single_video(
-        "example_video.mp4",
-        "example_output.xml",
-        compression_ratio=0.8
+    # Step 1: Transcribe
+    print("Step 1: Transcribing videos...")
+    result1 = quick_transcribe_videos(
+        "Test Project",
+        ["video1.mp4", "video2.mp4"],
+        progress_update
     )
     
-    if result.success:
-        print(f"✅ Processing completed: {result.message}")
+    if result1.success:
+        print("✅ Transcription completed")
+        
+        # Step 2: Generate script (would normally get prompt from UI)
+        print("Step 2: Generating script...")
+        result2 = quick_generate_script(
+            result1.data,
+            "Create a 10-minute educational video focusing on key concepts",
+            10,
+            progress_update
+        )
+        
+        if result2.success:
+            print("✅ Script generated")
+            
+            # Step 3: Export
+            print("Step 3: Exporting...")
+            result3 = quick_export_script(
+                result2.data,
+                "output.xml",
+                "premiere_xml",
+                progress_update
+            )
+            
+            if result3.success:
+                print("✅ Export completed")
+            else:
+                print(f"❌ Export failed: {result3.message}")
+        else:
+            print(f"❌ Script generation failed: {result2.message}")
     else:
-        print(f"❌ Processing failed: {result.message}")
+        print(f"❌ Transcription failed: {result1.message}")

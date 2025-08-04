@@ -1,623 +1,675 @@
 """
-Smart Edit Script Editor Window
+Smart Edit Script Editor Window - Prompt-Driven Version
 
-Interactive editor for reviewing and modifying AI-generated edit decisions.
-Allows users to override AI choices before final XML export.
+Interactive editor for reviewing and modifying AI-generated scripts.
+Takes user prompt, generates script, displays full text for editing.
 """
 
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
-from tkinter.scrolledtext import ScrolledText
-from typing import Optional
+from tkinter import ttk, messagebox, scrolledtext
+from typing import List, Optional, Dict, Any
 import copy
+import threading
 
 # Add parent directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from script_generation import EditScript, CutDecision, EditAction, ConfidenceLevel
-from transcription import TranscriptionResult
-
-class ScriptEditorWindow:
-    """Interactive editor for edit scripts"""
-    
-    def __init__(self, parent, edit_script: EditScript, transcription_result: Optional[TranscriptionResult] = None):
-        self.parent = parent
-        self.original_script = edit_script
-        self.transcription_result = transcription_result
+try:
+    from script_generation import GeneratedScript, ScriptSegment, generate_script_from_prompt
+    from transcription import TranscriptionResult
+except ImportError:
+    try:
+        # Fallback for direct execution
+        from script_generation import GeneratedScript, ScriptSegment, generate_script_from_prompt
+        from transcription import TranscriptionResult
+    except ImportError:
+        # Define minimal classes for development
+        print("Warning: Could not import script_generation modules")
         
-        # Create working copy
-        self.edit_script = copy.deepcopy(edit_script)
-        self.modified = False
+        class GeneratedScript:
+            def __init__(self):
+                self.full_text = ""
+                self.segments = []
+                self.title = "Test Script"
+                self.target_duration_minutes = 10
+                self.estimated_duration_seconds = 600
+                self.user_prompt = ""
+                self.metadata = {}
+        
+        class ScriptSegment:
+            def __init__(self):
+                self.start_time = 0.0
+                self.end_time = 10.0
+                self.content = "Test content"
+                self.video_index = 0
+                self.keep = True
+        
+        class TranscriptionResult:
+            def __init__(self):
+                self.segments = []
+                self.metadata = {'total_duration': 600}
+        
+        def generate_script_from_prompt(*args, **kwargs):
+            raise NotImplementedError("Script generation not available in development mode")
+
+class PromptScriptEditorWindow:
+    """Interactive prompt-driven script editor"""
+    
+    def __init__(self, parent, transcriptions: List[TranscriptionResult], project_name: str = "Video Project"):
+        self.parent = parent
+        self.transcriptions = transcriptions
+        self.project_name = project_name
+        
+        # Determine if single or multicam
+        self.is_multicam = len(transcriptions) > 1
+        self.video_count = len(transcriptions)
+        
+        # Calculate total duration
+        self.total_duration = sum(t.metadata.get('total_duration', 0) for t in transcriptions)
+        
+        # State variables
+        self.generated_script: Optional[GeneratedScript] = None
+        self.modified_script: Optional[GeneratedScript] = None
+        self.is_generating = False
+        self.script_modified = False
+        self.generation_thread = None  # Track background thread
+        self.window_closed = False  # Track window state
         
         # Create window
         self.window = tk.Toplevel(parent)
-        self.window.title("Smart Edit - Script Editor")
-        self.window.geometry("1400x800")
+        self.window.title(f"Smart Edit - Script Generator & Editor")
+        self.window.geometry("1600x900")
         self.window.transient(parent)
         self.window.grab_set()
         
-        # Track which cuts are selected
-        self.selected_cuts = set()
+        # Handle window closing
+        self.window.protocol("WM_DELETE_WINDOW", self._on_window_close)
         
+        # Setup UI
         self._setup_ui()
-        self._populate_cuts()
-        self._update_summary()
+        self._update_project_info()
     
     def _setup_ui(self):
         """Set up the script editor interface"""
-        # Main container
-        main_frame = ttk.Frame(self.window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Main container with notebook (tabs)
+        self.notebook = ttk.Notebook(self.window)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Title and summary
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=tk.X, pady=(0, 10))
+        # Tab 1: Prompt & Generation
+        self.prompt_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.prompt_frame, text="1. Script Generation")
+        self._setup_prompt_tab()
         
-        ttk.Label(title_frame, text="Edit Script Review", font=("Arial", 16, "bold")).pack(side=tk.LEFT)
+        # Tab 2: Script Editor
+        self.editor_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.editor_frame, text="2. Script Editor")
+        self._setup_editor_tab()
         
-        # Summary info
-        self.summary_label = ttk.Label(title_frame, text="", font=("Arial", 10))
-        self.summary_label.pack(side=tk.RIGHT)
+        # Tab 3: Timeline Review
+        self.timeline_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.timeline_frame, text="3. Timeline Review")
+        self._setup_timeline_tab()
         
-        # Create paned window for main content
-        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # Initially disable editor tabs
+        self.notebook.tab(1, state="disabled")
+        self.notebook.tab(2, state="disabled")
         
-        # Left panel - Cut list
-        left_frame = ttk.LabelFrame(paned, text="Edit Decisions", padding="5")
-        paned.add(left_frame, weight=2)
-        
-        # Controls frame
-        controls_frame = ttk.Frame(left_frame)
-        controls_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Bulk actions
-        ttk.Label(controls_frame, text="Bulk Actions:").pack(side=tk.LEFT)
-        ttk.Button(controls_frame, text="Keep Selected", command=self.keep_selected).pack(side=tk.LEFT, padx=(5, 2))
-        ttk.Button(controls_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=(2, 2))
-        ttk.Button(controls_frame, text="Speed Up Selected", command=self.speed_up_selected).pack(side=tk.LEFT, padx=(2, 5))
-        
-        # Filter controls
-        filter_frame = ttk.Frame(controls_frame)
-        filter_frame.pack(side=tk.RIGHT)
-        
-        ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=(0, 5))
-        self.filter_var = tk.StringVar(value="all")
-        filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_var, values=["all", "keep", "remove", "speed_up"], width=10)
-        filter_combo.pack(side=tk.LEFT, padx=(0, 5))
-        filter_combo.bind("<<ComboboxSelected>>", self._filter_cuts)
-        
-        ttk.Button(filter_frame, text="Refresh", command=self._populate_cuts).pack(side=tk.LEFT)
-        
-        # Cuts treeview
-        self.tree_frame = ttk.Frame(left_frame)
-        self.tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Treeview with scrollbars
-        self.tree = ttk.Treeview(self.tree_frame, columns=("time", "duration", "action", "reason", "confidence", "text"), show="headings")
-        
-        # Configure columns
-        self.tree.heading("time", text="Time")
-        self.tree.heading("duration", text="Duration")
-        self.tree.heading("action", text="Action")
-        self.tree.heading("reason", text="Reason")
-        self.tree.heading("confidence", text="Confidence")
-        self.tree.heading("text", text="Text")
-        
-        self.tree.column("time", width=80, minwidth=60)
-        self.tree.column("duration", width=60, minwidth=50)
-        self.tree.column("action", width=80, minwidth=60)
-        self.tree.column("reason", width=150, minwidth=100)
-        self.tree.column("confidence", width=80, minwidth=60)
-        self.tree.column("text", width=300, minwidth=200)
-        
-        # Scrollbars
-        v_scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        h_scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Grid layout
-        self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        
-        self.tree_frame.columnconfigure(0, weight=1)
-        self.tree_frame.rowconfigure(0, weight=1)
-        
-        # Bind events
-        self.tree.bind("<Double-1>", self._on_double_click)
-        self.tree.bind("<Button-1>", self._on_single_click)
-        self.tree.bind("<Button-3>", self._on_right_click)  # Right click context menu
-        
-        # Right panel - Details and preview
-        right_frame = ttk.LabelFrame(paned, text="Details & Preview", padding="5")
-        paned.add(right_frame, weight=1)
-        
-        # Details section
-        details_frame = ttk.LabelFrame(right_frame, text="Selected Cut Details", padding="5")
-        details_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.details_text = ScrolledText(details_frame, height=8, state=tk.DISABLED)
-        self.details_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Quick edit controls
-        edit_frame = ttk.LabelFrame(right_frame, text="Quick Edit", padding="5")
-        edit_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Action buttons
-        action_frame = ttk.Frame(edit_frame)
-        action_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Button(action_frame, text="✅ Keep", command=lambda: self._change_action(EditAction.KEEP)).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(action_frame, text="❌ Remove", command=lambda: self._change_action(EditAction.REMOVE)).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(action_frame, text="⚡ Speed Up", command=lambda: self._change_action(EditAction.SPEED_UP)).pack(side=tk.LEFT)
-        
-        # Speed factor control
-        speed_frame = ttk.Frame(edit_frame)
-        speed_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Label(speed_frame, text="Speed Factor:").pack(side=tk.LEFT, padx=(0, 5))
-        self.speed_var = tk.DoubleVar(value=1.5)
-        speed_spin = ttk.Spinbox(speed_frame, from_=1.1, to=3.0, increment=0.1, textvariable=self.speed_var, width=10)
-        speed_spin.pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(speed_frame, text="Apply", command=self._apply_speed_factor).pack(side=tk.LEFT)
-        
-        # Timeline preview
-        preview_frame = ttk.LabelFrame(right_frame, text="Timeline Preview", padding="5")
-        preview_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.timeline_text = ScrolledText(preview_frame, height=10, state=tk.DISABLED)
-        self.timeline_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Bottom buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        ttk.Button(button_frame, text="Reset All", command=self.reset_script).pack(side=tk.LEFT)
-        ttk.Button(button_frame, text="Undo Changes", command=self.undo_changes).pack(side=tk.LEFT, padx=(5, 0))
-        
-        ttk.Button(button_frame, text="Cancel", command=self.cancel).pack(side=tk.RIGHT)
-        ttk.Button(button_frame, text="Save & Close", command=self.save_and_close).pack(side=tk.RIGHT, padx=(0, 10))
-    
-    def _populate_cuts(self):
-        """Populate the cuts treeview"""
-        # Clear existing items
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        
-        # Get filter
-        filter_action = self.filter_var.get()
-        
-        # Add cuts
-        for i, cut in enumerate(self.edit_script.cuts):
-            # Apply filter
-            if filter_action != "all" and cut.action.value != filter_action:
-                continue
-            
-            # Format time
-            time_str = f"{cut.start_time:.1f}s"
-            duration_str = f"{cut.end_time - cut.start_time:.1f}s"
-            
-            # Format action with emoji
-            action_emoji = {"keep": "✅", "remove": "❌", "speed_up": "⚡"}.get(cut.action.value, "?")
-            action_str = f"{action_emoji} {cut.action.value}"
-            
-            # Confidence color
-            confidence_str = cut.confidence.value
-            
-            # Truncate text
-            text_preview = cut.original_text[:60] + "..." if len(cut.original_text) > 60 else cut.original_text
-            
-            # Insert item
-            item_id = self.tree.insert("", tk.END, values=(
-                time_str, duration_str, action_str, cut.reason, confidence_str, text_preview
-            ))
-            
-            # Store cut index in item tags (more reliable than set)
-            self.tree.item(item_id, tags=(f"cut_{i}",))
-            
-            # Color coding based on action
-            if cut.action == EditAction.KEEP:
-                self.tree.item(item_id, tags=(f"cut_{i}", "keep"))
-            elif cut.action == EditAction.REMOVE:
-                self.tree.item(item_id, tags=(f"cut_{i}", "remove"))
-            elif cut.action == EditAction.SPEED_UP:
-                self.tree.item(item_id, tags=(f"cut_{i}", "speed"))
-        
-        # Configure tags
-        self.tree.tag_configure("keep", background="#e8f5e8")
-        self.tree.tag_configure("remove", background="#ffe8e8")
-        self.tree.tag_configure("speed", background="#fff3e0")
-        
-        self._update_timeline_preview()
-    
-    def _filter_cuts(self, event=None):
-        """Filter cuts based on selection"""
-        self._populate_cuts()
-    
-    def _get_cut_index_from_item(self, item):
-        """Extract cut index from tree item tags"""
-        tags = self.tree.item(item, "tags")
-        for tag in tags:
-            if tag.startswith("cut_"):
-                try:
-                    return int(tag.split("_")[1])
-                except (IndexError, ValueError):
-                    continue
-        return None
-    
-    def _on_single_click(self, event):
-        """Handle single click on tree item"""
-        item = self.tree.selection()[0] if self.tree.selection() else None
-        if item:
-            self._show_cut_details(item)
-    
-    def _on_double_click(self, event):
-        """Handle double click on tree item"""
-        item = self.tree.selection()[0] if self.tree.selection() else None
-        if item:
-            self._edit_cut_dialog(item)
-    
-    def _on_right_click(self, event):
-        """Handle right click context menu"""
-        item = self.tree.identify_row(event.y)
-        if item:
-            self.tree.selection_set(item)
-            self._show_context_menu(event, item)
-    
-    def _show_cut_details(self, item):
-        """Show details for selected cut"""
-        cut_index = self._get_cut_index_from_item(item)
-        if cut_index is None:
-            return
-            
-        cut = self.edit_script.cuts[cut_index]
-        
-        # Build details text
-        details = []
-        details.append(f"=== CUT #{cut_index + 1} DETAILS ===\n")
-        details.append(f"Time Range: {cut.start_time:.2f}s - {cut.end_time:.2f}s")
-        details.append(f"Duration: {cut.end_time - cut.start_time:.2f} seconds")
-        details.append(f"Action: {cut.action.value.upper()}")
-        details.append(f"Reason: {cut.reason}")
-        details.append(f"Confidence: {cut.confidence.value}")
-        
-        if hasattr(cut, 'speed_factor') and cut.speed_factor:
-            details.append(f"Speed Factor: {cut.speed_factor:.1f}x")
-        
-        if hasattr(cut, 'camera_id') and cut.camera_id:
-            details.append(f"Camera: {cut.camera_id}")
-        
-        details.append(f"\nOriginal Text:")
-        details.append(f'"{cut.original_text}"')
-        
-        # Show transcription context if available
-        if self.transcription_result:
-            segment = next((s for s in self.transcription_result.segments if s.start == cut.start_time), None)
-            if segment:
-                details.append(f"\nTranscription Details:")
-                details.append(f"Speaker: {segment.speaker}")
-                details.append(f"Content Type: {segment.content_type}")
-                details.append(f"Speech Rate: {segment.speech_rate}")
-                details.append(f"Contains Filler: {segment.contains_filler}")
-                details.append(f"Pause After: {segment.pause_after:.2f}s")
-        
-        # Display details
-        self.details_text.config(state=tk.NORMAL)
-        self.details_text.delete(1.0, tk.END)
-        self.details_text.insert(1.0, "\n".join(details))
-        self.details_text.config(state=tk.DISABLED)
-    
-    def _show_context_menu(self, event, item):
-        """Show context menu for cut"""
-        cut_index = self._get_cut_index_from_item(item)
-        if cut_index is None:
-            return
-            
-        context_menu = tk.Menu(self.window, tearoff=0)
-        cut = self.edit_script.cuts[cut_index]
-        
-        context_menu.add_command(label="✅ Keep", command=lambda: self._change_cut_action(cut_index, EditAction.KEEP))
-        context_menu.add_command(label="❌ Remove", command=lambda: self._change_cut_action(cut_index, EditAction.REMOVE))
-        context_menu.add_command(label="⚡ Speed Up", command=lambda: self._change_cut_action(cut_index, EditAction.SPEED_UP))
-        context_menu.add_separator()
-        context_menu.add_command(label="📝 Edit Details...", command=lambda: self._edit_cut_dialog(item))
-        
-        try:
-            context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            context_menu.grab_release()
-    
-    def _change_action(self, new_action):
-        """Change action for currently selected cut"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a cut to modify.")
-            return
-        
-        item = selection[0]
-        cut_index = self._get_cut_index_from_item(item)
-        if cut_index is not None:
-            self._change_cut_action(cut_index, new_action)
-    
-    def _change_cut_action(self, cut_index, new_action):
-        """Change action for specific cut"""
-        cut = self.edit_script.cuts[cut_index]
-        old_action = cut.action
-        
-        cut.action = new_action
-        cut.reason = f"User modified: {new_action.value}"
-        cut.confidence = ConfidenceLevel.HIGH
-        
-        # Handle speed factor
-        if new_action == EditAction.SPEED_UP and not cut.speed_factor:
-            cut.speed_factor = self.speed_var.get()
-        elif new_action != EditAction.SPEED_UP:
-            cut.speed_factor = None
-        
-        self.modified = True
-        self._populate_cuts()
-        self._update_summary()
-        
-        # Re-select the modified item
-        for item in self.tree.get_children():
-            if self._get_cut_index_from_item(item) == cut_index:
-                self.tree.selection_set(item)
-                self._show_cut_details(item)
-                break
-    
-    def _apply_speed_factor(self):
-        """Apply speed factor to selected cut"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a cut to modify.")
-            return
-        
-        item = selection[0]
-        cut_index = self._get_cut_index_from_item(item)
-        if cut_index is None:
-            return
-            
-        cut = self.edit_script.cuts[cut_index]
-        
-        if cut.action == EditAction.SPEED_UP:
-            cut.speed_factor = self.speed_var.get()
-            self.modified = True
-            self._populate_cuts()
-            self._show_cut_details(item)
-        else:
-            messagebox.showwarning("Invalid Action", "Speed factor can only be applied to 'Speed Up' cuts.")
-    
-    def _edit_cut_dialog(self, item):
-        """Open dialog to edit cut details"""
-        cut_index = self._get_cut_index_from_item(item)
-        if cut_index is None:
-            return
-            
-        cut = self.edit_script.cuts[cut_index]
-        
-        # Create edit dialog
-        dialog = tk.Toplevel(self.window)
-        dialog.title(f"Edit Cut #{cut_index + 1}")
-        dialog.geometry("400x300")
-        dialog.transient(self.window)
-        dialog.grab_set()
-        
-        # Edit form
-        form_frame = ttk.Frame(dialog, padding="10")
-        form_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Action selection
-        ttk.Label(form_frame, text="Action:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        action_var = tk.StringVar(value=cut.action.value)
-        action_combo = ttk.Combobox(form_frame, textvariable=action_var, values=["keep", "remove", "speed_up"])
-        action_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        # Reason
-        ttk.Label(form_frame, text="Reason:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
-        reason_var = tk.StringVar(value=cut.reason)
-        reason_entry = ttk.Entry(form_frame, textvariable=reason_var)
-        reason_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        # Speed factor (if applicable)
-        ttk.Label(form_frame, text="Speed Factor:").grid(row=2, column=0, sticky=tk.W, pady=(0, 5))
-        speed_var = tk.DoubleVar(value=cut.speed_factor or 1.5)
-        speed_entry = ttk.Entry(form_frame, textvariable=speed_var)
-        speed_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        form_frame.columnconfigure(1, weight=1)
-        
-        # Buttons
-        button_frame = ttk.Frame(dialog)
+        # Bottom button frame
+        button_frame = ttk.Frame(self.window)
         button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        def apply_changes():
-            try:
-                new_action = EditAction(action_var.get())
-                cut.action = new_action
-                cut.reason = reason_var.get()
-                
-                if new_action == EditAction.SPEED_UP:
-                    cut.speed_factor = speed_var.get()
-                else:
-                    cut.speed_factor = None
-                
-                self.modified = True
-                self._populate_cuts()
-                self._update_summary()
-                dialog.destroy()
-                
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to apply changes: {e}")
+        ttk.Button(button_frame, text="Cancel", command=self.cancel).pack(side=tk.RIGHT)
+        self.export_btn = ttk.Button(button_frame, text="Export Script", command=self.export_script, state="disabled")
+        self.export_btn.pack(side=tk.RIGHT, padx=(0, 10))
+    
+    def _setup_prompt_tab(self):
+        """Setup the prompt input and generation tab"""
+        # Project info frame
+        info_frame = ttk.LabelFrame(self.prompt_frame, text="Project Information", padding="10")
+        info_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
         
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
-        ttk.Button(button_frame, text="Apply", command=apply_changes).pack(side=tk.RIGHT, padx=(0, 10))
+        self.info_label = ttk.Label(info_frame, text="", font=("Arial", 10))
+        self.info_label.pack(anchor=tk.W)
+        
+        # Prompt input frame
+        prompt_frame = ttk.LabelFrame(self.prompt_frame, text="Video Instructions", padding="10")
+        prompt_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Instructions
+        instructions = ttk.Label(prompt_frame, 
+            text="Describe what you want your video to be about. Be specific about:\n"
+                 "• The main topic or message\n"
+                 "• Target audience\n"
+                 "• Key points to emphasize\n"
+                 "• Content to remove or minimize\n"
+                 "• Overall tone and style",
+            font=("Arial", 9), foreground="gray")
+        instructions.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Prompt text area
+        prompt_input_frame = ttk.Frame(prompt_frame)
+        prompt_input_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(prompt_input_frame, text="Your Instructions:", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        
+        self.prompt_text = scrolledtext.ScrolledText(prompt_input_frame, height=8, wrap=tk.WORD)
+        self.prompt_text.pack(fill=tk.BOTH, expand=True, pady=(5, 10))
+        
+        # Placeholder text
+        placeholder = ("Example: 'Create a 10-minute educational video about Python programming. "
+                      "Focus on practical examples and remove any long pauses or tangents. "
+                      "Keep the tone conversational but professional. Emphasize the key concepts "
+                      "and provide clear step-by-step explanations.'")
+        
+        self.prompt_text.insert(1.0, placeholder)
+        self.prompt_text.bind("<FocusIn>", self._clear_placeholder)
+        self.prompt_text.bind("<FocusOut>", self._restore_placeholder)
+        self.prompt_text.config(foreground="gray")
+        
+        # Generation settings frame
+        settings_frame = ttk.Frame(prompt_frame)
+        settings_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Target duration
+        duration_frame = ttk.Frame(settings_frame)
+        duration_frame.pack(side=tk.LEFT)
+        
+        ttk.Label(duration_frame, text="Target Duration:").pack(side=tk.LEFT)
+        self.duration_var = tk.IntVar(value=10)
+        duration_spin = ttk.Spinbox(duration_frame, from_=1, to=60, textvariable=self.duration_var, width=5)
+        duration_spin.pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Label(duration_frame, text="minutes").pack(side=tk.LEFT)
+        
+        # Generation button
+        self.generate_btn = ttk.Button(settings_frame, text="🤖 Generate Script", 
+                                     command=self.generate_script, style="Accent.TButton")
+        self.generate_btn.pack(side=tk.RIGHT)
+        
+        # Progress frame (initially hidden)
+        self.progress_frame = ttk.Frame(prompt_frame)
+        
+        self.progress_label = ttk.Label(self.progress_frame, text="Generating script...")
+        self.progress_label.pack()
+        
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='indeterminate')
+        self.progress_bar.pack(fill=tk.X, pady=(5, 0))
     
-    def keep_selected(self):
-        """Keep all selected cuts"""
-        self._bulk_action(EditAction.KEEP)
+    def _setup_editor_tab(self):
+        """Setup the script editing tab"""
+        # Header frame
+        header_frame = ttk.Frame(self.editor_frame)
+        header_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.script_title_label = ttk.Label(header_frame, text="", font=("Arial", 14, "bold"))
+        self.script_title_label.pack(side=tk.LEFT)
+        
+        self.script_stats_label = ttk.Label(header_frame, text="", font=("Arial", 10))
+        self.script_stats_label.pack(side=tk.RIGHT)
+        
+        # Main content frame with paned window
+        content_paned = ttk.PanedWindow(self.editor_frame, orient=tk.HORIZONTAL)
+        content_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        # Left panel - Full script text
+        left_frame = ttk.LabelFrame(content_paned, text="Generated Script", padding="5")
+        content_paned.add(left_frame, weight=3)
+        
+        # Script text editor
+        self.script_text = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, font=("Consolas", 10))
+        self.script_text.pack(fill=tk.BOTH, expand=True)
+        self.script_text.bind("<KeyPress>", self._on_script_modified)
+        
+        # Right panel - Segment controls
+        right_frame = ttk.LabelFrame(content_paned, text="Timeline Segments", padding="5")
+        content_paned.add(right_frame, weight=1)
+        
+        # Segment list with checkboxes
+        segments_container = ttk.Frame(right_frame)
+        segments_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Segments treeview
+        self.segments_tree = ttk.Treeview(segments_container, 
+                                        columns=("time", "video", "content"), 
+                                        show="tree headings")
+        
+        # Configure columns
+        self.segments_tree.heading("#0", text="✓")
+        self.segments_tree.heading("time", text="Time")
+        self.segments_tree.heading("video", text="Video")
+        self.segments_tree.heading("content", text="Content")
+        
+        self.segments_tree.column("#0", width=30, minwidth=30)
+        self.segments_tree.column("time", width=80, minwidth=60)
+        self.segments_tree.column("video", width=50, minwidth=40)
+        self.segments_tree.column("content", width=200, minwidth=150)
+        
+        # Scrollbars for segments
+        segments_scroll = ttk.Scrollbar(segments_container, orient=tk.VERTICAL, command=self.segments_tree.yview)
+        self.segments_tree.configure(yscrollcommand=segments_scroll.set)
+        
+        self.segments_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        segments_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind segment events
+        self.segments_tree.bind("<Button-1>", self._on_segment_click)
+        
+        # Segment controls
+        segment_controls = ttk.Frame(right_frame)
+        segment_controls.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(segment_controls, text="Select All", command=self._select_all_segments).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(segment_controls, text="Deselect All", command=self._deselect_all_segments).pack(side=tk.LEFT)
+        
+        # Regenerate button
+        regen_frame = ttk.Frame(self.editor_frame)
+        regen_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        ttk.Button(regen_frame, text="🔄 Regenerate Script", command=self.regenerate_script).pack(side=tk.LEFT)
+        ttk.Label(regen_frame, text="Tip: Edit your prompt above and regenerate for different results", 
+                 font=("Arial", 9), foreground="gray").pack(side=tk.RIGHT)
     
-    def remove_selected(self):
-        """Remove all selected cuts"""
-        self._bulk_action(EditAction.REMOVE)
+    def _setup_timeline_tab(self):
+        """Setup the timeline review tab"""
+        # Timeline preview
+        timeline_frame = ttk.LabelFrame(self.timeline_frame, text="Final Timeline Preview", padding="10")
+        timeline_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.timeline_text = scrolledtext.ScrolledText(timeline_frame, font=("Consolas", 9), state=tk.DISABLED)
+        self.timeline_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Export options
+        export_frame = ttk.LabelFrame(self.timeline_frame, text="Export Options", padding="10")
+        export_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        self.export_format_var = tk.StringVar(value="premiere_xml")
+        
+        ttk.Radiobutton(export_frame, text="Premiere Pro XML", 
+                       variable=self.export_format_var, value="premiere_xml").pack(side=tk.LEFT)
+        ttk.Radiobutton(export_frame, text="Text Script", 
+                       variable=self.export_format_var, value="text").pack(side=tk.LEFT, padx=(20, 0))
+        ttk.Radiobutton(export_frame, text="JSON Data", 
+                       variable=self.export_format_var, value="json").pack(side=tk.LEFT, padx=(20, 0))
     
-    def speed_up_selected(self):
-        """Speed up all selected cuts"""
-        self._bulk_action(EditAction.SPEED_UP)
+    def _update_project_info(self):
+        """Update project information display"""
+        if self.is_multicam:
+            project_type = f"Multi-Camera ({self.video_count} videos)"
+        else:
+            project_type = "Single Video"
+        
+        duration_mins = int(self.total_duration // 60)
+        duration_secs = int(self.total_duration % 60)
+        
+        info_text = (f"Project: {self.project_name}\n"
+                    f"Type: {project_type}\n"
+                    f"Total Duration: {duration_mins}:{duration_secs:02d}\n"
+                    f"Transcription: Complete")
+        
+        self.info_label.config(text=info_text)
     
-    def _bulk_action(self, action):
-        """Apply action to all selected cuts"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select cuts to modify.")
+    def _clear_placeholder(self, event):
+        """Clear placeholder text on focus"""
+        if self.prompt_text.get(1.0, tk.END).strip() == self._get_placeholder_text():
+            self.prompt_text.delete(1.0, tk.END)
+            self.prompt_text.config(foreground="black")
+    
+    def _restore_placeholder(self, event):
+        """Restore placeholder if empty"""
+        if not self.prompt_text.get(1.0, tk.END).strip():
+            self.prompt_text.insert(1.0, self._get_placeholder_text())
+            self.prompt_text.config(foreground="gray")
+    
+    def _get_placeholder_text(self):
+        """Get the placeholder text"""
+        return ("Example: 'Create a 10-minute educational video about Python programming. "
+               "Focus on practical examples and remove any long pauses or tangents. "
+               "Keep the tone conversational but professional. Emphasize the key concepts "
+               "and provide clear step-by-step explanations.'")
+    
+    def _on_script_modified(self, event):
+        """Handle script text modifications"""
+        if not self.script_modified:
+            self.script_modified = True
+            self._update_script_stats()
+    
+    def _on_segment_click(self, event):
+        """Handle segment tree clicks (toggle checkboxes)"""
+        item = self.segments_tree.identify_row(event.y)
+        if item and self.segments_tree.identify_column(event.x) == "#0":
+            # Toggle checkbox
+            current_text = self.segments_tree.item(item, "text")
+            if current_text == "✓":
+                self.segments_tree.item(item, text="")
+            else:
+                self.segments_tree.item(item, text="✓")
+            
+            self._update_timeline_preview()
+    
+    def generate_script(self):
+        """Generate script from user prompt"""
+        prompt = self.prompt_text.get(1.0, tk.END).strip()
+        
+        # Validate prompt
+        if not prompt or prompt == self._get_placeholder_text():
+            messagebox.showwarning("Missing Prompt", 
+                                  "Please enter instructions for your video script.")
             return
         
-        count = 0
-        for item in selection:
-            cut_index = self._get_cut_index_from_item(item)
-            if cut_index is None:
-                continue
+        target_duration = self.duration_var.get()
+        
+        # Show progress
+        self.progress_frame.pack(fill=tk.X, padx=10, pady=10)
+        self.progress_bar.start()
+        self.generate_btn.config(state="disabled")
+        self.is_generating = True
+        
+        # Generate in background thread
+        def generate_thread():
+            try:
+                # Check if window still exists
+                if self.window_closed:
+                    return
+                    
+                script = generate_script_from_prompt(
+                    transcriptions=self.transcriptions,
+                    user_prompt=prompt,
+                    target_duration_minutes=target_duration
+                )
                 
-            cut = self.edit_script.cuts[cut_index]
-            
-            cut.action = action
-            cut.reason = f"User bulk action: {action.value}"
-            cut.confidence = ConfidenceLevel.HIGH
-            
-            if action == EditAction.SPEED_UP:
-                cut.speed_factor = self.speed_var.get()
-            else:
-                cut.speed_factor = None
-            
-            count += 1
+                # Update UI in main thread (only if window still exists)
+                if not self.window_closed:
+                    self.window.after(0, self._on_script_generated, script)
+                
+            except Exception as e:
+                # Handle errors (only if window still exists)
+                if not self.window_closed:
+                    self.window.after(0, self._on_script_error, str(e))
         
-        self.modified = True
-        self._populate_cuts()
-        self._update_summary()
-        
-        messagebox.showinfo("Bulk Action", f"Applied '{action.value}' to {count} cut(s).")
+        self.generation_thread = threading.Thread(target=generate_thread, daemon=True)
+        self.generation_thread.start()
     
-    def _update_summary(self):
-        """Update the summary information"""
-        keep_count = sum(1 for cut in self.edit_script.cuts if cut.action == EditAction.KEEP)
-        remove_count = sum(1 for cut in self.edit_script.cuts if cut.action == EditAction.REMOVE)
-        speed_count = sum(1 for cut in self.edit_script.cuts if cut.action == EditAction.SPEED_UP)
+    def _on_script_generated(self, script: GeneratedScript):
+        """Handle successful script generation"""
+        self.generated_script = script
+        self.modified_script = copy.deepcopy(script)
+        self.script_modified = False
         
-        # Recalculate compression ratio
-        total_kept_duration = sum(
-            cut.end_time - cut.start_time for cut in self.edit_script.cuts 
-            if cut.action in [EditAction.KEEP, EditAction.SPEED_UP]
-        )
+        # Hide progress
+        self.progress_frame.pack_forget()
+        self.progress_bar.stop()
+        self.generate_btn.config(state="normal")
+        self.is_generating = False
         
-        if self.edit_script.original_duration > 0:
-            compression_ratio = total_kept_duration / self.edit_script.original_duration
-        else:
-            compression_ratio = 0.0
+        # Enable editor tabs
+        self.notebook.tab(1, state="normal")
+        self.notebook.tab(2, state="normal")
+        self.export_btn.config(state="normal")
         
-        summary_text = f"Keep: {keep_count} | Remove: {remove_count} | Speed: {speed_count} | Compression: {compression_ratio:.1%}"
-        if self.modified:
-            summary_text += " (Modified)"
+        # Switch to editor tab
+        self.notebook.select(1)
         
-        self.summary_label.config(text=summary_text)
+        # Populate editor
+        self._populate_script_editor()
+        self._populate_segments()
+        self._update_timeline_preview()
+        
+        messagebox.showinfo("Script Generated", 
+                           f"Script generated successfully!\n"
+                           f"• {len(script.segments)} segments selected\n"
+                           f"• Estimated duration: {script.estimated_duration_seconds/60:.1f} minutes")
+    
+    def _on_script_error(self, error_message: str):
+        """Handle script generation error"""
+        # Hide progress
+        self.progress_frame.pack_forget()
+        self.progress_bar.stop()
+        self.generate_btn.config(state="normal")
+        self.is_generating = False
+        
+        messagebox.showerror("Generation Failed", 
+                            f"Failed to generate script:\n{error_message}\n\n"
+                            f"Please check your prompt and try again.")
+    
+    def _populate_script_editor(self):
+        """Populate the script editor with generated content"""
+        if not self.generated_script:
+            return
+        
+        # Validate script structure
+        try:
+            title = getattr(self.generated_script, 'title', 'Untitled Script')
+            full_text = getattr(self.generated_script, 'full_text', 'No script content available')
+            
+            # Update title and stats
+            self.script_title_label.config(text=title)
+            self._update_script_stats()
+            
+            # Set script text
+            self.script_text.delete(1.0, tk.END)
+            self.script_text.insert(1.0, full_text)
+            
+        except Exception as e:
+            messagebox.showerror("Display Error", f"Error displaying script: {e}")
+            self.script_text.delete(1.0, tk.END)
+            self.script_text.insert(1.0, "Error loading script content")
+    
+    def _update_script_stats(self):
+        """Update script statistics"""
+        if not self.generated_script:
+            return
+        
+        duration_text = f"Target: {self.generated_script.target_duration_minutes}min"
+        estimate_text = f"Estimated: {self.generated_script.estimated_duration_seconds/60:.1f}min"
+        segments_text = f"Segments: {len(self.generated_script.segments)}"
+        
+        status_text = ""
+        if self.script_modified:
+            status_text = " (Modified)"
+        
+        stats_text = f"{duration_text} | {estimate_text} | {segments_text}{status_text}"
+        self.script_stats_label.config(text=stats_text)
+    
+    def _populate_segments(self):
+        """Populate the segments tree"""
+        if not self.generated_script or not hasattr(self.generated_script, 'segments'):
+            return
+        
+        # Clear existing items
+        for item in self.segments_tree.get_children():
+            self.segments_tree.delete(item)
+        
+        # Validate segments
+        segments = getattr(self.generated_script, 'segments', [])
+        if not segments:
+            # Add placeholder item
+            self.segments_tree.insert("", tk.END, 
+                                    text="",
+                                    values=("0.0s", "V1", "No segments available"),
+                                    tags=("placeholder",))
+            return
+        
+        # Add segments
+        for i, segment in enumerate(segments):
+            try:
+                # Format time with error handling
+                start_time = getattr(segment, 'start_time', 0.0)
+                time_str = f"{start_time:.1f}s"
+                
+                # Video indicator
+                video_index = getattr(segment, 'video_index', 0)
+                if self.is_multicam:
+                    video_str = f"V{video_index + 1}"
+                else:
+                    video_str = "V1"
+                
+                # Content preview with error handling
+                content = getattr(segment, 'content', 'No content')
+                content_preview = content[:50] + "..." if len(content) > 50 else content
+                
+                # Insert with checkbox
+                keep = getattr(segment, 'keep', True)
+                checkbox_text = "✓" if keep else ""
+                
+                self.segments_tree.insert("", tk.END, 
+                                        text=checkbox_text,
+                                        values=(time_str, video_str, content_preview),
+                                        tags=(f"segment_{i}",))
+                
+            except Exception as e:
+                # Add error item
+                self.segments_tree.insert("", tk.END, 
+                                        text="",
+                                        values=("ERR", "V?", f"Error loading segment {i}: {e}"),
+                                        tags=(f"error_{i}",))
+    
+    def _select_all_segments(self):
+        """Select all segments"""
+        for item in self.segments_tree.get_children():
+            self.segments_tree.item(item, text="✓")
+        self._update_timeline_preview()
+    
+    def _deselect_all_segments(self):
+        """Deselect all segments"""
+        for item in self.segments_tree.get_children():
+            self.segments_tree.item(item, text="")
+        self._update_timeline_preview()
     
     def _update_timeline_preview(self):
         """Update the timeline preview"""
-        timeline = []
-        timeline.append("=== TIMELINE PREVIEW ===\n")
+        if not self.generated_script:
+            return
         
-        current_time = 0.0
-        kept_cuts = [cut for cut in self.edit_script.cuts if cut.action in [EditAction.KEEP, EditAction.SPEED_UP]]
+        timeline_lines = []
+        timeline_lines.append(f"=== FINAL TIMELINE PREVIEW ===\n")
+        timeline_lines.append(f"Project: {self.generated_script.title}")
+        timeline_lines.append(f"Type: {'Multi-Camera' if self.is_multicam else 'Single Video'}")
+        timeline_lines.append("")
         
-        for i, cut in enumerate(kept_cuts[:10]):  # Show first 10 cuts
-            duration = cut.end_time - cut.start_time
-            if cut.speed_factor:
-                duration = duration / cut.speed_factor
-                speed_note = f" ({cut.speed_factor:.1f}x)"
-            else:
-                speed_note = ""
+        # Get selected segments
+        selected_segments = []
+        for i, item in enumerate(self.segments_tree.get_children()):
+            if self.segments_tree.item(item, "text") == "✓":
+                selected_segments.append(self.generated_script.segments[i])
+        
+        if not selected_segments:
+            timeline_lines.append("No segments selected for final timeline.")
+        else:
+            current_time = 0.0
             
-            camera_note = ""
-            if hasattr(cut, 'camera_id') and cut.camera_id:
-                camera_note = f" [{cut.camera_id}]"
+            for i, segment in enumerate(selected_segments):
+                duration = segment.end_time - segment.start_time
+                
+                # Video indicator
+                video_indicator = f"[Video {segment.video_index + 1}]" if self.is_multicam else ""
+                
+                # Timeline entry
+                timeline_lines.append(
+                    f"{current_time:6.1f}s - {current_time + duration:6.1f}s {video_indicator}: "
+                    f"{segment.content[:60]}{'...' if len(segment.content) > 60 else ''}"
+                )
+                
+                current_time += duration
             
-            timeline.append(f"{current_time:6.1f}s - {current_time + duration:6.1f}s: {cut.original_text[:40]}...{speed_note}{camera_note}")
-            current_time += duration
+            timeline_lines.append("")
+            timeline_lines.append(f"Total Duration: {current_time:.1f} seconds ({current_time/60:.1f} minutes)")
+            timeline_lines.append(f"Selected Segments: {len(selected_segments)} of {len(self.generated_script.segments)}")
         
-        if len(kept_cuts) > 10:
-            timeline.append(f"\n... and {len(kept_cuts) - 10} more cuts")
-        
-        timeline.append(f"\nTotal Timeline Duration: {current_time:.1f}s")
-        
-        # Display timeline
+        # Update timeline display
         self.timeline_text.config(state=tk.NORMAL)
         self.timeline_text.delete(1.0, tk.END)
-        self.timeline_text.insert(1.0, "\n".join(timeline))
+        self.timeline_text.insert(1.0, "\n".join(timeline_lines))
         self.timeline_text.config(state=tk.DISABLED)
     
-    def reset_script(self):
-        """Reset script to original state"""
-        if messagebox.askyesno("Reset Script", "Are you sure you want to reset all changes?"):
-            self.edit_script = copy.deepcopy(self.original_script)
-            self.modified = False
-            self._populate_cuts()
-            self._update_summary()
-    
-    def undo_changes(self):
-        """Undo recent changes"""
-        # Simple implementation - just reset to original
-        self.reset_script()
-    
-    def save_and_close(self):
-        """Save changes and close window"""
-        if self.modified:
-            # Update the script's metadata
-            keep_count = sum(1 for cut in self.edit_script.cuts if cut.action == EditAction.KEEP)
-            remove_count = sum(1 for cut in self.edit_script.cuts if cut.action == EditAction.REMOVE)
-            
-            self.edit_script.metadata.update({
-                "segments_kept": keep_count,
-                "segments_removed": remove_count,
-                "user_modified": True
-            })
+    def regenerate_script(self):
+        """Regenerate script with current prompt"""
+        if self.is_generating:
+            return
         
-        # Store modified script
-        self.modified_script = self.edit_script
+        if messagebox.askyesno("Regenerate Script", 
+                              "This will create a new script and lose any edits. Continue?"):
+            self.generate_script()
+    
+    def export_script(self):
+        """Export the final script"""
+        if not self.generated_script:
+            messagebox.showwarning("No Script", "Please generate a script first.")
+            return
+        
+        # Update script with current text and selected segments
+        current_text = self.script_text.get(1.0, tk.END)
+        self.modified_script.full_text = current_text
+        
+        # Update segment selections
+        for i, item in enumerate(self.segments_tree.get_children()):
+            if i < len(self.modified_script.segments):
+                self.modified_script.segments[i].keep = (self.segments_tree.item(item, "text") == "✓")
+        
+        # Store the result
+        self.final_script = self.modified_script
+        
+        messagebox.showinfo("Export Ready", 
+                           "Script is ready for export. You can now close this window.")
+        
         self.window.destroy()
     
-    def cancel(self):
-        """Cancel without saving"""
-        if self.modified:
-            if messagebox.askyesno("Unsaved Changes", "You have unsaved changes. Are you sure you want to cancel?"):
+    def _on_window_close(self):
+        """Handle window closing"""
+        self.window_closed = True
+        
+        if self.is_generating:
+            if messagebox.askyesno("Cancel Generation", 
+                                  "Script generation is in progress. Cancel anyway?"):
                 self.window.destroy()
         else:
             self.window.destroy()
+    
+    def cancel(self):
+        """Cancel script generation"""
+        self._on_window_close()
 
+# Convenience function for easy integration
+def show_script_editor(parent, transcriptions: List[TranscriptionResult], 
+                      project_name: str = "Video Project") -> Optional[GeneratedScript]:
+    """
+    Show the script editor window and return the final script
+    
+    Args:
+        parent: Parent window
+        transcriptions: List of transcription results
+        project_name: Name of the project
+    
+    Returns:
+        GeneratedScript if completed, None if cancelled
+    """
+    editor = PromptScriptEditorWindow(parent, transcriptions, project_name)
+    parent.wait_window(editor.window)
+    
+    return getattr(editor, 'final_script', None)
+
+# Test function
 if __name__ == "__main__":
-    # Test the script editor with dummy data
-    from script_generation import EditScript, CutDecision, EditAction, ConfidenceLevel
-    
-    # Create test data
-    test_cuts = [
-        CutDecision(0, 0.0, 3.0, "Hello world", EditAction.KEEP, "Important", ConfidenceLevel.HIGH),
-        CutDecision(1, 3.5, 7.0, "Um, this is filler", EditAction.REMOVE, "Filler", ConfidenceLevel.HIGH),
-        CutDecision(2, 7.5, 10.0, "Key information here", EditAction.KEEP, "Main point", ConfidenceLevel.HIGH)
-    ]
-    
-    test_script = EditScript(
-        cuts=test_cuts,
-        transitions=[],
-        estimated_final_duration=6.0,
-        original_duration=10.0,
-        compression_ratio=0.6,
-        metadata={}
-    )
+    # Mock data for testing
+    class MockTranscriptionResult:
+        def __init__(self, duration):
+            self.segments = []
+            self.metadata = {'total_duration': duration}
     
     root = tk.Tk()
-    root.withdraw()  # Hide main window
+    root.withdraw()
     
-    editor = ScriptEditorWindow(root, test_script)
+    # Test with single video
+    transcriptions = [MockTranscriptionResult(600)]  # 10 minutes
+    
+    result = show_script_editor(root, transcriptions, "Test Project")
+    
+    if result:
+        print(f"Script generated: {result.title}")
+        print(f"Segments: {len(result.segments)}")
+    else:
+        print("Cancelled")
+    
     root.mainloop()

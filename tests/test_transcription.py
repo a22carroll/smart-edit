@@ -38,7 +38,7 @@ class TestTranscriptionConfig(unittest.TestCase):
         self.assertEqual(config.language, "auto")
         self.assertTrue(config.enable_speaker_detection)
         self.assertTrue(config.enable_word_timestamps)
-        self.assertEqual(config.model_size, "large-v3")
+        self.assertEqual(config.model_size, "base")
         self.assertIn("um", config.filler_words)
         self.assertIn("uh", config.filler_words)
     
