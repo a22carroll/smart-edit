@@ -97,6 +97,95 @@ class SmartScriptGenerator:
             logger.error(f"Failed to initialize OpenAI client: {e}")
             return False
     
+    def _select_important_segments_intelligently(self, all_segments: List[Dict], max_segments: int = 50) -> List[Dict]:
+        """
+        Intelligently select the most important segments for AI processing
+        Provides much better coverage than just taking first/middle/last
+        """
+        if len(all_segments) <= max_segments:
+            return all_segments
+        
+        total_segments = len(all_segments)
+        logger.warning(f"Too many segments ({total_segments}), intelligently selecting {max_segments} most important")
+        
+        # Strategy: Distribute segments evenly across the video timeline
+        # This ensures we get good coverage of the entire content
+        
+        selected_segments = []
+        
+        # Calculate step size to distribute evenly
+        step_size = total_segments / max_segments
+        
+        # Select segments at regular intervals
+        for i in range(max_segments):
+            segment_index = int(i * step_size)
+            
+            # Ensure we don't go out of bounds
+            if segment_index < len(all_segments):
+                selected_segments.append(all_segments[segment_index])
+        
+        # Always include the very first and very last segments (intro/conclusion)
+        if len(all_segments) > 2 and max_segments > 2:
+            # Replace first selected with actual first segment
+            selected_segments[0] = all_segments[0]
+            # Replace last selected with actual last segment
+            selected_segments[-1] = all_segments[-1]
+        
+        # Prioritize segments with important content types
+        selected_segments = self._boost_important_content_types(selected_segments, all_segments, max_segments)
+        
+        logger.info(f"Selected {len(selected_segments)} segments evenly distributed across {total_segments} total segments")
+        logger.info(f"Coverage: Every ~{step_size:.1f} segments, spanning full video timeline")
+        
+        return selected_segments
+
+    def _boost_important_content_types(self, current_selection: List[Dict], all_segments: List[Dict], max_segments: int) -> List[Dict]:
+        """
+        Replace less important segments with more important ones based on content type
+        """
+        # Define importance levels
+        critical_types = ['main_point', 'topic_introduction', 'conclusion']
+        important_types = ['transition', 'supporting'] 
+        filler_types = ['greeting', 'filler']
+        
+        # Find critical segments not in current selection
+        selected_indices = set()
+        for seg in current_selection:
+            # Get original index from all_segments
+            for i, orig_seg in enumerate(all_segments):
+                if (seg.get('text', '') == orig_seg.get('text', '') and 
+                    seg.get('start', 0) == orig_seg.get('start', 0)):
+                    selected_indices.add(i)
+                    break
+        
+        # Find critical segments we're missing
+        missing_critical = []
+        for i, seg in enumerate(all_segments):
+            if (i not in selected_indices and 
+                seg.get('content_type', 'unknown') in critical_types):
+                missing_critical.append((i, seg))
+        
+        # Find filler segments in current selection to replace
+        replaceable_indices = []
+        for j, seg in enumerate(current_selection):
+            if seg.get('content_type', 'unknown') in filler_types:
+                replaceable_indices.append(j)
+        
+        # Replace filler with critical content
+        replacements_made = 0
+        max_replacements = min(len(missing_critical), len(replaceable_indices), max_segments // 4)
+        
+        for i in range(max_replacements):
+            replace_idx = replaceable_indices[i]
+            _, new_segment = missing_critical[i]
+            current_selection[replace_idx] = new_segment
+            replacements_made += 1
+        
+        if replacements_made > 0:
+            logger.info(f"Boosted {replacements_made} important segments (replaced filler content)")
+        
+        return current_selection
+
     def generate_script_from_prompt(self, 
                                    transcriptions: List[TranscriptionResult], 
                                    user_prompt: str,
@@ -173,14 +262,7 @@ class SmartScriptGenerator:
         
         # Limit segments to avoid API token limits with smarter selection
         if len(all_segments) > 50:
-            logger.warning(f"Too many segments ({len(all_segments)}), selecting 50 most important")
-            # Keep first 20, last 20, and 10 from middle for better coverage
-            selected_segments = (
-                all_segments[:20] + 
-                all_segments[len(all_segments)//2-5:len(all_segments)//2+5] + 
-                all_segments[-20:]
-            )
-            all_segments = selected_segments[:50]  # Ensure exactly 50
+            all_segments = self._select_important_segments_intelligently(all_segments, 50) 
         
         # Create AI prompt
         ai_prompt = self._create_ai_prompt(all_segments, user_prompt, target_duration)
