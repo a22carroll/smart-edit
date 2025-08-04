@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmeml version="4">
+
+  <!-- Multicam Source Sequence -->
+  <sequence id="multicam-source">
+    <name>{sequence_name}_MultiCam_Source</name>
+    <duration>{total_duration}</duration>
+    <rate>
+      <timebase>{fps}</timebase>
+      <ntsc>FALSE</ntsc>
+    </rate>
+    <timecode>
+      <rate>
+        <timebase>{fps}</timebase>
+        <ntsc>FALSE</ntsc>
+      </rate>
+      <string>01:00:00:00</string>
+      <frame>0</frame>
+      <displayformat>NDF</displayformat>
+    </timecode>
+    <media>
+      <video>
+        <format>
+          <samplecharacteristics>
+            <rate>
+              <timebase>{fps}</timebase>
+              <ntsc>FALSE</ntsc>
+            </rate>
+            <codec>
+              <name>Apple ProRes 422</name>
+            </codec>
+            <width>{width}</width>
+            <height>{height}</height>
+            <anamorphic>FALSE</anamorphic>
+            <pixelaspectratio>square</pixelaspectratio>
+            <fielddominance>none</fielddominance>
+          </samplecharacteristics>
+        </format>
+{source_tracks}
+      </video>
+      <audio>
+        <format>
+          <samplecharacteristics>
+            <depth>16</depth>
+            <samplerate>48000</samplerate>
+          </samplecharacteristics>
+        </format>
+{audio_tracks}
+      </audio>
+    </media>
+  </sequence>
+
+  <!-- Final Edited Timeline -->
+  <sequence id="edited-timeline">
+    <name>{sequence_name}_Edited</name>
+    <duration>{final_duration}</duration>
+    <rate>
+      <timebase>{fps}</timebase>
+      <ntsc>FALSE</ntsc>
+    </rate>
+    <timecode>
+      <rate>
+        <timebase>{fps}</timebase>
+        <ntsc>FALSE</ntsc>
+      </rate>
+      <string>01:00:00:00</string>
+      <frame>0</frame>
+      <displayformat>NDF</displayformat>
+    </timecode>
+    <media>
+      <video>
+        <format>
+          <samplecharacteristics>
+            <rate>
+              <timebase>{fps}</timebase>
+              <ntsc>FALSE</ntsc>
+            </rate>
+            <width>{width}</width>
+            <height>{height}</height>
+          </samplecharacteristics>
+        </format>
+        <track>
+{edit_decisions}
+        </track>
+      </video>
+      <audio>
+        <format>
+          <samplecharacteristics>
+            <depth>16</depth>
+            <samplerate>48000</samplerate>
+          </samplecharacteristics>
+        </format>
+        <track>
+{audio_decisions}
+        </track>
+      </audio>
+    </media>
+  </sequence>
+
+</xmeml>
