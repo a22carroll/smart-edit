@@ -343,7 +343,7 @@ class TestSegmentProcessing(unittest.TestCase):
         
         # Small pause between second and third segment
         pause2 = self.transcriber._calculate_pause_after(segments[1], segments, 1)
-        self.assertEqual(pause2, 0.2, places=1)  # 7.2 - 7.0
+        self.assertAlmostEqual(pause2, 0.2, places=1)   # 7.2 - 7.0
         
         # No pause after last segment
         pause3 = self.transcriber._calculate_pause_after(segments[2], segments, 2)
