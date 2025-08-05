@@ -50,6 +50,8 @@ class SmartEditMainWindow:
         
         # Application state
         self.video_files = []
+        self.video_groups = {}  # Track which group each video belongs to
+        self.selected_video_index = -1  # Track currently selected video
         self.transcription_results = []
         self.generated_script = None
         self.processing_thread = None
@@ -95,17 +97,37 @@ class SmartEditMainWindow:
         # File selection
         ttk.Label(left_frame, text="Selected Videos:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
         
-        # File listbox with video type indicator
+        # File listbox with multicam grouping
         listbox_frame = ttk.Frame(left_frame)
         listbox_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         listbox_frame.columnconfigure(0, weight=1)
+        listbox_frame.columnconfigure(1, weight=0)
+        listbox_frame.columnconfigure(2, weight=0)
         
+        # Video files list
         self.file_listbox = tk.Listbox(listbox_frame, height=6)
         self.file_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self.file_listbox.bind('<<ListboxSelect>>', self._on_file_select)
+        self.file_listbox.bind('<Button-1>', self._on_file_click)  # Additional click handler
+        
+        # Multicam group dropdown for selected file  
+        group_frame = ttk.Frame(listbox_frame)
+        group_frame.grid(row=0, column=1, sticky=(tk.N, tk.S), padx=(5, 0))
+        
+        ttk.Label(group_frame, text="Group:", font=("Arial", 8)).pack()
+        self.group_var = tk.StringVar(value="Single")
+        self.group_combo = ttk.Combobox(group_frame, textvariable=self.group_var, 
+                                       values=["Single", "Multicam A", "Multicam B", "Multicam C"], 
+                                       width=12, state="readonly")  # Increased width
+        self.group_combo.pack(pady=(2, 0))
+        self.group_combo.bind('<<ComboboxSelected>>', self._on_group_change)
         
         listbox_scroll = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
-        listbox_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        listbox_scroll.grid(row=0, column=2, sticky=(tk.N, tk.S))
         self.file_listbox.configure(yscrollcommand=listbox_scroll.set)
+        
+        # Store multicam groupings
+        self.video_groups = {}  # {video_path: group_name}
         
         # Video type indicator
         self.video_type_label = ttk.Label(left_frame, text="No videos loaded", font=("Arial", 9))
@@ -195,13 +217,41 @@ class SmartEditMainWindow:
         self.project_name = self.project_name_var.get() or "Untitled Project"
     
     def _update_video_type_display(self):
-        """Update the video type indicator"""
+        """Update the video type indicator based on groupings"""
         if not self.video_files:
             self.video_type_label.config(text="No videos loaded", foreground="gray")
-        elif len(self.video_files) == 1:
-            self.video_type_label.config(text="📹 Single Video Project", foreground="blue")
+            return
+        
+        # Count groups
+        groups = {}
+        for video_path in self.video_files:
+            group = self.video_groups.get(video_path, "Single")
+            if group not in groups:
+                groups[group] = []
+            groups[group].append(video_path)
+        
+        # Create display text
+        group_info = []
+        for group_name, videos in groups.items():
+            if group_name == "Single":
+                if len(videos) == 1:
+                    group_info.append("1 single video")
+                else:
+                    group_info.append(f"{len(videos)} single videos")
+            else:
+                group_info.append(f"{group_name}: {len(videos)} videos")
+        
+        display_text = " | ".join(group_info)
+        
+        # Set color based on complexity
+        if len(groups) == 1 and "Single" in groups:
+            color = "blue"
+            icon = "📹"
         else:
-            self.video_type_label.config(text=f"🎥 Multi-Camera Project ({len(self.video_files)} videos)", foreground="green")
+            color = "green" 
+            icon = "🎥"
+        
+        self.video_type_label.config(text=f"{icon} {display_text}", foreground=color)
     
     def new_project(self):
         """Start a new project"""
@@ -230,13 +280,16 @@ class SmartEditMainWindow:
         for file_path in files:
             if file_path not in self.video_files:
                 self.video_files.append(file_path)
+                # Default to "Single" group
+                self.video_groups[file_path] = "Single"
+                
                 filename = os.path.basename(file_path)
                 # Show file size
                 try:
                     size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    display_name = f"{filename} ({size_mb:.1f} MB)"
+                    display_name = f"{filename} ({size_mb:.1f} MB) [Single]"
                 except:
-                    display_name = filename
+                    display_name = f"{filename} [Single]"
                 
                 self.file_listbox.insert(tk.END, display_name)
                 added_count += 1
@@ -259,9 +312,15 @@ class SmartEditMainWindow:
             index = selection[0]
             self.file_listbox.delete(index)
             removed_file = self.video_files.pop(index)
+            # Remove from groups tracking
+            if removed_file in self.video_groups:
+                del self.video_groups[removed_file]
             self.log_message(f"🗑️ Removed: {os.path.basename(removed_file)}")
             self._update_video_type_display()
             self.update_status(f"{len(self.video_files)} video(s) loaded")
+            
+            # Clear group selection
+            self.group_var.set("Single")
             
             # Clear results if no videos left
             if not self.video_files:
@@ -270,11 +329,84 @@ class SmartEditMainWindow:
     def clear_videos(self):
         """Clear all videos from the list"""
         self.video_files.clear()
+        self.video_groups.clear()  # Clear group tracking
+        self.selected_video_index = -1  # Reset selection
         self.file_listbox.delete(0, tk.END)
+        self.group_var.set("Single") 
         self._reset_processing_state()
         self._update_video_type_display()
         self.update_status("Ready - Load video files to begin")
         self.log_message("🗑️ Cleared all video files")
+    
+    def _on_file_click(self, event=None):
+        """Handle direct clicks on file list"""
+        # Small delay to ensure selection is processed
+        self.root.after(10, self._on_file_select)
+    
+    def _on_file_select(self, event=None):
+        """Handle file selection in listbox"""
+        try:
+            selection = self.file_listbox.curselection()
+            if selection and hasattr(self, 'group_var'):
+                index = selection[0]
+                if 0 <= index < len(self.video_files):
+                    self.selected_video_index = index  # Store selected index
+                    video_path = self.video_files[index]
+                    current_group = self.video_groups.get(video_path, "Single")
+                    self.group_var.set(current_group)
+                    self.log_message(f"🎯 Selected: {os.path.basename(video_path)} [{current_group}]")
+            else:
+                # No selection - reset
+                self.selected_video_index = -1
+                self.group_var.set("Single")
+        except Exception as e:
+            self.log_message(f"⚠️ Error in file selection: {e}")
+    
+    def _on_group_change(self, event=None):
+        """Handle group assignment change"""
+        try:
+            # Use stored index instead of current selection
+            if self.selected_video_index >= 0 and self.selected_video_index < len(self.video_files):
+                index = self.selected_video_index
+                video_path = self.video_files[index]
+                new_group = self.group_var.get()
+                old_group = self.video_groups.get(video_path, "Single")
+                
+                if new_group == old_group:
+                    return  # No change needed
+                
+                # Update group assignment
+                self.video_groups[video_path] = new_group
+                
+                # Update listbox display
+                filename = os.path.basename(video_path)
+                try:
+                    size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                    display_name = f"{filename} ({size_mb:.1f} MB) [{new_group}]"
+                except:
+                    display_name = f"{filename} [{new_group}]"
+                
+                # Safely update listbox
+                self.file_listbox.delete(index)
+                self.file_listbox.insert(index, display_name)
+                self.file_listbox.select_set(index)  # Re-select the item
+                
+                self._update_video_type_display()
+                self.log_message(f"📁 {filename}: {old_group} → {new_group}")
+            else:
+                self.log_message(f"⚠️ No valid file selected (index: {self.selected_video_index})")
+        except Exception as e:
+            self.log_message(f"⚠️ Error changing group: {e}")
+    
+    def _get_video_groups(self):
+        """Get videos organized by groups for export"""
+        groups = {}
+        for video_path in self.video_files:
+            group = self.video_groups.get(video_path, "Single")
+            if group not in groups:
+                groups[group] = []
+            groups[group].append(video_path)
+        return groups
     
     def _reset_processing_state(self):
         """Reset all processing state"""
@@ -499,22 +631,49 @@ class SmartEditMainWindow:
         self.results_text.config(state=tk.DISABLED)
     
     def export_xml(self):
-        """Export the generated script to XML"""
+        """Export the generated script to XML with proper grouping"""
         if not self.generated_script:
             messagebox.showwarning("No Script", "Please create a script first.")
             return
         
-        # Choose output file
+        # Get video groups
+        video_groups = self._get_video_groups()
+        
+        # Handle different export scenarios
+        multicam_groups = {k: v for k, v in video_groups.items() if k != "Single" and len(v) > 1}
+        single_videos = video_groups.get("Single", [])
+        
+        export_count = len(multicam_groups) + len(single_videos)
+        
+        if export_count == 0:
+            messagebox.showwarning("No Valid Groups", "No videos to export.")
+            return
+        elif export_count == 1:
+            # Single export - choose one file
+            if multicam_groups:
+                group_name, videos = next(iter(multicam_groups.items()))
+                default_name = f"{self.project_name}_{group_name}.xml"
+            else:
+                videos = single_videos
+                default_name = f"{self.project_name}.xml"
+            
+            self._export_single_group(videos, default_name, len(videos) > 1)
+        else:
+            # Multiple exports - choose directory
+            directory = filedialog.askdirectory(title="Choose Export Directory")
+            if directory:
+                self._export_multiple_groups(video_groups, directory)
+    
+    def _export_single_group(self, videos, default_name, is_multicam):
+        """Export a single group of videos"""
         if XML_EXPORT_AVAILABLE:
-            default_name = f"{self.project_name}.xml"
             filetypes = [("XML files", "*.xml"), ("All files", "*.*")]
         else:
-            default_name = f"{self.project_name}_script.txt"
             filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
+            default_name = default_name.replace('.xml', '.txt')
         
         output_path = filedialog.asksaveasfilename(
             title="Save Export File",
-            defaultextension=".xml" if XML_EXPORT_AVAILABLE else ".txt",
             initialfile=default_name,
             filetypes=filetypes
         )
@@ -522,50 +681,64 @@ class SmartEditMainWindow:
         if not output_path:
             return
         
+        self._perform_export(videos, output_path, is_multicam)
+    
+    def _export_multiple_groups(self, video_groups, directory):
+        """Export multiple groups to separate files"""
+        exported_count = 0
+        
+        for group_name, videos in video_groups.items():
+            if group_name == "Single":
+                # Export each single video separately
+                for i, video in enumerate(videos):
+                    filename = f"{self.project_name}_single_{i+1}.xml"
+                    output_path = os.path.join(directory, filename)
+                    if self._perform_export([video], output_path, False):
+                        exported_count += 1
+            else:
+                # Export multicam group
+                if len(videos) > 1:
+                    filename = f"{self.project_name}_{group_name}.xml"
+                    output_path = os.path.join(directory, filename)
+                    if self._perform_export(videos, output_path, True):
+                        exported_count += 1
+        
+        if exported_count > 0:
+            messagebox.showinfo("Export Complete", 
+                               f"Exported {exported_count} XML file(s) to:\n{directory}")
+        else:
+            messagebox.showerror("Export Failed", "No files were exported successfully.")
+    
+    def _perform_export(self, videos, output_path, is_multicam):
+        """Perform the actual export"""
         try:
             if XML_EXPORT_AVAILABLE:
-                # Use the real XML exporter
-                self.log_message("📤 Generating Premiere Pro XML...")
+                self.log_message(f"📤 Exporting {'multicam' if is_multicam else 'single cam'} XML...")
                 
                 success = export_script_to_xml(
                     script=self.generated_script,
-                    video_paths=self.video_files,  # Pass original video file paths
+                    video_paths=videos,
                     output_path=output_path,
-                    sequence_name=self.project_name
+                    sequence_name=os.path.splitext(os.path.basename(output_path))[0]
                 )
                 
                 if success:
-                    self.log_message(f"✅ XML exported successfully: {output_path}")
-                    
-                    # Show success message with details
-                    video_type = "Multi-Camera" if len(self.video_files) > 1 else "Single Camera"
-                    segments = getattr(self.generated_script, 'segments', [])
-                    selected_count = len([s for s in segments if getattr(s, 'keep', True)])
-                    
-                    messagebox.showinfo("Export Complete", 
-                                       f"Premiere Pro XML exported successfully!\n\n"
-                                       f"File: {os.path.basename(output_path)}\n"
-                                       f"Type: {video_type}\n"
-                                       f"Segments: {selected_count}\n"
-                                       f"Videos: {len(self.video_files)}\n\n"
-                                       f"Import this XML file into Premiere Pro to create your timeline.")
+                    self.log_message(f"✅ XML exported: {os.path.basename(output_path)}")
+                    return True
                 else:
-                    self.log_message("❌ XML export failed - check logs for details")
-                    messagebox.showerror("Export Failed", "XML export failed. Check the logs for details.")
+                    self.log_message(f"❌ XML export failed: {os.path.basename(output_path)}")
+                    return False
             else:
                 # Fallback to text export
-                self.log_message("📤 Exporting text representation (XML module not available)...")
+                self.log_message("📤 Exporting text representation...")
                 self._export_text_representation(output_path)
-                
-                self.log_message(f"✅ Text export completed: {output_path}")
-                messagebox.showinfo("Export Complete", 
-                                   f"Script exported as text file:\n{output_path}\n\n"
-                                   f"Note: Install xml_export module for full Premiere Pro XML support.")
+                self.log_message(f"✅ Text export completed: {os.path.basename(output_path)}")
+                return True
                 
         except Exception as e:
             error_msg = f"Export failed: {str(e)}"
             self.log_message(f"❌ {error_msg}")
-            messagebox.showerror("Export Error", error_msg)
+            return False
     
     def _export_text_representation(self, output_path):
         """Export script as text representation (fallback when XML export not available)"""
