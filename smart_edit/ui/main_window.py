@@ -24,11 +24,12 @@ sys.path.insert(0, parent_dir)
 try:
     from transcription import transcribe_video, TranscriptionConfig
     from script_generation import GeneratedScript, generate_script_from_prompt
-    from ui.script_editor import show_script_editor  # Updated import
-    # Note: XML export will be implemented later
-    # from xml_export import export_single_cam_xml, export_multicam_xml
+    from ui.script_editor import show_script_editor
+    from xml_export import export_script_to_xml  # Fixed import
+    XML_EXPORT_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Import error - {e}")
+    XML_EXPORT_AVAILABLE = False
     # Define minimal fallbacks for development
     class TranscriptionConfig:
         pass
@@ -49,8 +50,8 @@ class SmartEditMainWindow:
         
         # Application state
         self.video_files = []
-        self.transcription_results = []  # Changed: now list for multiple videos
-        self.generated_script = None     # Changed: now GeneratedScript instead of EditScript
+        self.transcription_results = []
+        self.generated_script = None
         self.processing_thread = None
         self.project_name = "Untitled Project"
         
@@ -139,7 +140,8 @@ class SmartEditMainWindow:
         
         ttk.Label(left_frame, text="Export:", font=("Arial", 12, "bold")).grid(row=11, column=0, sticky=tk.W, pady=(0, 10))
         
-        self.export_button = ttk.Button(left_frame, text="📤 Export XML", command=self.export_xml, state=tk.DISABLED)
+        export_text = "📤 Export XML" if XML_EXPORT_AVAILABLE else "📤 Export (Text Only)"
+        self.export_button = ttk.Button(left_frame, text=export_text, command=self.export_xml, state=tk.DISABLED)
         self.export_button.grid(row=12, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         
         # Right panel - Results and logs
@@ -485,7 +487,10 @@ class SmartEditMainWindow:
         
         results.append("")
         results.append("📤 READY FOR EXPORT:")
-        results.append("  Click 'Export XML' to create Premiere Pro project file")
+        if XML_EXPORT_AVAILABLE:
+            results.append("  Click 'Export XML' to create Premiere Pro project file")
+        else:
+            results.append("  XML export module not available - will export text format")
         
         # Display results
         self.results_text.config(state=tk.NORMAL)
@@ -500,29 +505,62 @@ class SmartEditMainWindow:
             return
         
         # Choose output file
-        default_name = f"{self.project_name}.xml"
+        if XML_EXPORT_AVAILABLE:
+            default_name = f"{self.project_name}.xml"
+            filetypes = [("XML files", "*.xml"), ("All files", "*.*")]
+        else:
+            default_name = f"{self.project_name}_script.txt"
+            filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
+        
         output_path = filedialog.asksaveasfilename(
-            title="Save Premiere Pro XML",
-            defaultextension=".xml",
+            title="Save Export File",
+            defaultextension=".xml" if XML_EXPORT_AVAILABLE else ".txt",
             initialfile=default_name,
-            filetypes=[("XML files", "*.xml"), ("All files", "*.*")]
+            filetypes=filetypes
         )
         
         if not output_path:
             return
         
         try:
-            # TODO: Implement XML export for GeneratedScript
-            # This will be implemented once xml_export module is updated
-            
-            # For now, save as text representation
-            self._export_text_representation(output_path)
-            
-            self.log_message(f"✅ Script exported: {output_path}")
-            messagebox.showinfo("Export Complete", 
-                               f"Script exported successfully to:\n{output_path}\n\n"
-                               f"Note: Full XML export will be implemented soon.\n"
-                               f"This export contains the script structure and timeline data.")
+            if XML_EXPORT_AVAILABLE:
+                # Use the real XML exporter
+                self.log_message("📤 Generating Premiere Pro XML...")
+                
+                success = export_script_to_xml(
+                    script=self.generated_script,
+                    video_paths=self.video_files,  # Pass original video file paths
+                    output_path=output_path,
+                    sequence_name=self.project_name
+                )
+                
+                if success:
+                    self.log_message(f"✅ XML exported successfully: {output_path}")
+                    
+                    # Show success message with details
+                    video_type = "Multi-Camera" if len(self.video_files) > 1 else "Single Camera"
+                    segments = getattr(self.generated_script, 'segments', [])
+                    selected_count = len([s for s in segments if getattr(s, 'keep', True)])
+                    
+                    messagebox.showinfo("Export Complete", 
+                                       f"Premiere Pro XML exported successfully!\n\n"
+                                       f"File: {os.path.basename(output_path)}\n"
+                                       f"Type: {video_type}\n"
+                                       f"Segments: {selected_count}\n"
+                                       f"Videos: {len(self.video_files)}\n\n"
+                                       f"Import this XML file into Premiere Pro to create your timeline.")
+                else:
+                    self.log_message("❌ XML export failed - check logs for details")
+                    messagebox.showerror("Export Failed", "XML export failed. Check the logs for details.")
+            else:
+                # Fallback to text export
+                self.log_message("📤 Exporting text representation (XML module not available)...")
+                self._export_text_representation(output_path)
+                
+                self.log_message(f"✅ Text export completed: {output_path}")
+                messagebox.showinfo("Export Complete", 
+                                   f"Script exported as text file:\n{output_path}\n\n"
+                                   f"Note: Install xml_export module for full Premiere Pro XML support.")
                 
         except Exception as e:
             error_msg = f"Export failed: {str(e)}"
@@ -530,19 +568,25 @@ class SmartEditMainWindow:
             messagebox.showerror("Export Error", error_msg)
     
     def _export_text_representation(self, output_path):
-        """Export script as text representation (temporary solution)"""
+        """Export script as text representation (fallback when XML export not available)"""
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"Smart Edit Project Export\n")
             f.write(f"=" * 50 + "\n\n")
             
             f.write(f"Project: {self.project_name}\n")
             f.write(f"Generated: {getattr(self.generated_script, 'title', 'Untitled')}\n")
-            f.write(f"Type: {'Multi-Camera' if len(self.transcription_results) > 1 else 'Single Video'}\n\n")
+            f.write(f"Type: {'Multi-Camera' if len(self.transcription_results) > 1 else 'Single Video'}\n")
+            f.write(f"Videos: {len(self.video_files)}\n")
+            
+            # List video files
+            f.write(f"\nVideo Files:\n")
+            for i, video_path in enumerate(self.video_files):
+                f.write(f"  {i+1}. {os.path.basename(video_path)}\n")
             
             # User prompt
             user_prompt = getattr(self.generated_script, 'user_prompt', '')
             if user_prompt:
-                f.write(f"User Instructions:\n{user_prompt}\n\n")
+                f.write(f"\nUser Instructions:\n{user_prompt}\n\n")
             
             # Full script text
             full_text = getattr(self.generated_script, 'full_text', '')
@@ -560,7 +604,7 @@ class SmartEditMainWindow:
                 content = getattr(segment, 'content', 'No content')
                 video_idx = getattr(segment, 'video_index', 0)
                 
-                f.write(f"{start_time:.2f}s - {end_time:.2f}s [Video {video_idx + 1}]: {content}\n")
+                f.write(f"{i+1}. {start_time:.2f}s - {end_time:.2f}s [Video {video_idx + 1}]: {content}\n")
     
     def show_settings(self):
         """Show settings dialog"""
@@ -607,7 +651,7 @@ Features:
 • User prompt-driven script generation with GPT-4
 • Full script text editing and review
 • Multi-camera and single video support
-• Premiere Pro XML export (coming soon)
+• Premiere Pro XML export
 
 Built with Python, OpenAI APIs, and FFmpeg.
 """
