@@ -314,7 +314,7 @@ def show_version():
     print("")
     print("Features:")
     print("• High-accuracy transcription with Whisper AI")
-    print("• User prompt-driven script generation with GPT-4")
+    print("• User prompt-driven script generation with GPT-4o-mini")
     print("• Interactive script review and editing")
     print("• Multi-camera and single video support")
     print("• Premiere Pro XML export")

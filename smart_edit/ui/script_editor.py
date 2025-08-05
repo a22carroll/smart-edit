@@ -82,7 +82,7 @@ class PromptScriptEditorWindow:
         # Create window
         self.window = tk.Toplevel(parent)
         self.window.title(f"Smart Edit - Script Generator & Editor")
-        self.window.geometry("1600x900")
+        self.window.geometry("1000x700")
         self.window.transient(parent)
         self.window.grab_set()
         

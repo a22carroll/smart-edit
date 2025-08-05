@@ -63,7 +63,7 @@ class ScriptGenerationConfig:
     def __init__(self, **kwargs):
         # OpenAI settings
         self.openai_api_key = kwargs.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
-        self.model = kwargs.get('model') or os.getenv('OPENAI_MODEL', 'gpt-4')
+        self.model = kwargs.get('model') or os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
         self.temperature = float(kwargs.get('temperature') or os.getenv('OPENAI_TEMPERATURE', '0.3'))
         self.max_tokens = int(kwargs.get('max_tokens') or os.getenv('OPENAI_MAX_TOKENS', '8000'))
         
@@ -308,45 +308,79 @@ class SmartScriptGenerator:
     
     def _create_ai_prompt(self, segments: List[Dict], user_prompt: str, target_duration: int) -> str:
         """Create the prompt for AI script generation"""
-        
+    
         total_duration = sum(seg["duration"] for seg in segments)
+        target_seconds = target_duration * 60
         
+        # Add duration info to each segment for AI clarity
+        for seg in segments:
+            seg['duration_seconds'] = round(seg.get('duration', seg.get('end', 0) - seg.get('start', 0)), 1)
+
         return f"""
-Create a {target_duration}-minute video script based on the transcript segments below and the user's specific instructions.
+Create a {target_duration}-minute video script based ONLY on the transcript segments below.
 
 USER INSTRUCTIONS:
 "{user_prompt}"
 
-TARGET DURATION: {target_duration} minutes
+TARGET DURATION: {target_duration} minutes ({target_seconds} seconds)
 AVAILABLE CONTENT: {total_duration:.1f} minutes across {len(segments)} segments
+
+DURATION REQUIREMENTS:
+- You must select segments that total {target_seconds} seconds (±30 seconds acceptable)
+- Each segment shows its duration_seconds - use this to calculate your running total
+- Focus on TOTAL DURATION of selected content, not segment count
+- Keep adding segments until you reach {target_seconds} seconds total
 
 TRANSCRIPT SEGMENTS:
 {json.dumps(segments, indent=2)}
 
-Please return a JSON response with this exact structure:
+Return JSON with this structure:
 {{
-    "title": "Engaging title for the video based on the content and user instructions",
-    "script_text": "Complete readable script with timestamps like [0:30] and clear structure",
+    "title": "Title based on actual content",
+    "script_text": "Clean narrative script using ONLY actual segment content",
     "selected_segments": [
         {{
             "video": 0,
             "segment_id": 0,
             "start_time": 0.0,
             "end_time": 15.5,
-            "content": "Edited version of the segment text to include",
-            "reason": "Brief explanation of why this segment was selected"
+            "content": "EXACT text from the original segment (minimal editing only)",
+            "reason": "Why this segment was selected"
         }}
     ]
 }}
 
-REQUIREMENTS:
-1. Select segments that best fulfill the user's vision and instructions
-2. Create a natural, engaging narrative flow
-3. Target approximately {target_duration} minutes of content
-4. Include clear timestamps in script_text like [1:30], [4:15], etc.
-5. Edit segment text for clarity while preserving the core message
-6. Ensure smooth transitions between selected segments
-7. Return only valid JSON, no additional text or formatting
+CRITICAL CONTENT RULES:
+1. Use ONLY words that exist in the transcript segments
+2. Do NOT create new sentences or invented connections
+3. Do NOT make speakers reference each other unless they actually did
+4. Do NOT add smooth transitions if they don't exist in the source
+5. Keep original phrasing and meaning intact
+6. Remove interviewer questions and production notes only
+7. NEVER fabricate content, quotes, or connections
+
+SEGMENT SELECTION RULES:
+8. Select segments that total approximately {target_seconds} seconds
+9. Calculate running duration total as you select segments
+10. Include content from all speakers mentioned in user instructions
+11. Structure: intro segments → mission/importance → community impact → conclusion
+12. Use actual start_time/end_time from segments (no fake timestamps)
+
+SCRIPT FORMAT:
+13. Use actual timestamps from selected segments
+14. Present content in chronological order of selected segments
+15. Minimal editing - preserve authentic voice and meaning
+16. Remove only questions and production artifacts
+17. If segments don't flow perfectly, that's acceptable - don't invent content
+
+VALIDATION CHECKLIST:
+- Total duration of selected_segments = {target_seconds}s (±30s) ✓
+- Every sentence traces back to actual segment content ✓  
+- No fabricated connections between speakers ✓
+- Using real timestamps, not artificial ones ✓
+- Preserved authentic voice and meaning ✓
+
+Return only valid JSON. Do not create content that doesn't exist in the source material.
 """
 
     def _convert_ai_response(self, ai_result: Dict, transcriptions: List[TranscriptionResult], 
