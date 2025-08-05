@@ -1,7 +1,9 @@
 """
-XML Export Module - Fixed Bugs and Enhanced Premiere Pro Compatibility
+XML Export Module - Enhanced with Video Groups Support
 
 Fixes:
+- Added video_groups parameter support
+- Smart multicam handling based on groups
 - Corrected XML structure to match Premiere format
 - Fixed masterclip references and file structure
 - Consistent element naming (<name> vs <n>)
@@ -12,7 +14,7 @@ Fixes:
 import os
 import logging
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Dict, Optional
 import uuid
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +35,7 @@ except ImportError:
             pass
 
 class XMLExporter:
-    """Enhanced XML exporter with better Premiere Pro compatibility"""
+    """Enhanced XML exporter with video groups support and better Premiere Pro compatibility"""
     
     def __init__(self, fps: int = 24, width: int = 1920, height: int = 1080):
         self.fps = fps
@@ -43,9 +45,18 @@ class XMLExporter:
         self.ntsc = "TRUE" if fps in [24, 30, 60] else "FALSE"
     
     def export_script(self, script: GeneratedScript, video_paths: Union[str, List[str]], 
-                     output_path: str, sequence_name: str = "SmartEdit_Timeline") -> bool:
+                     output_path: str, sequence_name: str = "SmartEdit_Timeline", 
+                     video_groups: Optional[Dict[str, List[str]]] = None) -> bool:
         """
-        Export script to XML - automatically handles single cam vs multicam
+        Export script to XML with video groups support
+        
+        Args:
+            script: Generated script with segments
+            video_paths: List of video file paths
+            output_path: Output XML file path
+            sequence_name: Name for the sequence
+            video_groups: Dictionary mapping group names to video paths
+                         e.g., {"Single": [path1], "Multicam A": [path2, path3]}
         """
         try:
             # Convert single path to list
@@ -63,11 +74,19 @@ class XMLExporter:
             
             logger.info(f"Exporting {len(segments)} segments from {len(video_paths)} video(s)")
             
-            # Generate XML based on camera count
-            if len(video_paths) == 1:
-                xml_content = self._create_single_cam_xml(segments, video_paths[0], sequence_name)
-            else:
-                xml_content = self._create_multicam_xml(segments, video_paths, sequence_name)
+            # If no groups provided, create default grouping
+            if video_groups is None:
+                if len(video_paths) == 1:
+                    video_groups = {"Single": video_paths}
+                else:
+                    video_groups = {"Multicam A": video_paths}
+                    
+            # Log grouping information
+            for group_name, paths in video_groups.items():
+                logger.info(f"Group '{group_name}': {len(paths)} video(s)")
+            
+            # Generate XML based on grouping
+            xml_content = self._create_grouped_xml(segments, video_groups, sequence_name)
             
             # Save to file
             self._save_xml(xml_content, output_path)
@@ -77,6 +96,50 @@ class XMLExporter:
         except Exception as e:
             logger.error(f"❌ XML export failed: {e}")
             return False
+    
+    def _create_grouped_xml(self, segments: List[ScriptSegment], video_groups: Dict[str, List[str]], 
+                           sequence_name: str) -> str:
+        """Create XML with proper group handling"""
+        
+        # Determine the export strategy
+        multicam_groups = {k: v for k, v in video_groups.items() if len(v) > 1}
+        single_videos = []
+        for group_name, paths in video_groups.items():
+            if len(paths) == 1:
+                single_videos.extend(paths)
+        
+        if len(multicam_groups) == 1 and not single_videos:
+            # Pure multicam case
+            group_name, video_paths = next(iter(multicam_groups.items()))
+            logger.info(f"Creating pure multicam XML for group: {group_name}")
+            return self._create_multicam_xml(segments, video_paths, f"{sequence_name}_{group_name}")
+            
+        elif len(multicam_groups) == 0 and len(single_videos) == 1:
+            # Pure single cam case
+            logger.info("Creating single cam XML")
+            return self._create_single_cam_xml(segments, single_videos[0], sequence_name)
+            
+        else:
+            # Mixed case - create combined timeline
+            logger.info("Creating mixed timeline with multiple groups")
+            return self._create_mixed_xml(segments, video_groups, sequence_name)
+    
+    def _create_mixed_xml(self, segments: List[ScriptSegment], video_groups: Dict[str, List[str]], 
+                         sequence_name: str) -> str:
+        """Create XML for mixed single and multicam clips"""
+        
+        # For now, flatten all videos into one timeline
+        # This is a simplified approach - full implementation would create 
+        # multicam source clips for grouped videos
+        all_videos = []
+        for group_name, paths in video_groups.items():
+            all_videos.extend(paths)
+        
+        if len(all_videos) == 1:
+            return self._create_single_cam_xml(segments, all_videos[0], sequence_name)
+        else:
+            # Create a basic multicam structure with all videos
+            return self._create_multicam_xml(segments, all_videos, sequence_name)
     
     def _get_valid_segments(self, script: GeneratedScript) -> List[ScriptSegment]:
         """Extract valid segments from script"""
@@ -425,12 +488,9 @@ class XMLExporter:
 </xmeml>"""
     
     def _create_multicam_xml(self, segments: List[ScriptSegment], video_paths: List[str], sequence_name: str) -> str:
-        """Generate multicam XML - simplified implementation"""
+        """Generate multicam XML - enhanced implementation with group support"""
         
-        logger.info("Creating multicam XML with simplified structure")
-        
-        # For now, create a basic multicam structure
-        # Full multicam would require much more complex XML
+        logger.info(f"Creating multicam XML with {len(video_paths)} cameras")
         
         try:
             # Calculate the full duration we need to cover
@@ -486,7 +546,7 @@ class XMLExporter:
               <width>{self.width}</width>
               <height>{self.height}</height>
               <anamorphic>FALSE</anamorphic>
-              <pixelaspectratio>square</pixelaspectratio>
+              <pixelaspectratio>square</pixelaspectrario>
               <fielddominance>none</fielddominance>
             </samplecharacteristics>
           </video>
@@ -503,43 +563,48 @@ class XMLExporter:
                     logger.error(f"Error processing video file {video_path}: {e}")
                     continue
             
-            # Simple multicam sequence - just puts first camera on timeline
-            # Real multicam would need multicam source clips, angle switching, etc.
-            video_clips = f"""
-          <clipitem id="multicam-clip-1">
-            <name>Multicam_Main</name>
-            <enabled>TRUE</enabled>
-            <duration>{total_duration_frames}</duration>
-            <rate>
-              <timebase>{self.fps}</timebase>
-              <ntsc>{self.ntsc}</ntsc>
-            </rate>
-            <start>0</start>
-            <end>{total_duration_frames}</end>
-            <in>0</in>
-            <out>{total_duration_frames}</out>
-            <file id="file-1"/>
-            <sourcetrack>
-              <mediatype>video</mediatype>
-              <trackindex>1</trackindex>
-            </sourcetrack>
-            <logginginfo>
-              <description></description>
-              <scene></scene>
-              <shottake></shottake>
-              <lognote></lognote>
-              <good></good>
-              <originalvideofilename></originalvideofilename>
-              <originalaudiofilename></originalaudiofilename>
-            </logginginfo>
-            <colorinfo>
-              <lut></lut>
-              <lut1></lut1>
-              <asc_sop></asc_sop>
-              <asc_sat></asc_sat>
-              <lut2></lut2>
-            </colorinfo>
-          </clipitem>"""
+            # Create video tracks for each camera (simplified multicam approach)
+            video_tracks = ""
+            for i in range(len(video_paths)):
+                video_tracks += f"""
+            <track>
+              <enabled>TRUE</enabled>
+              <locked>FALSE</locked>
+              <clipitem id="multicam-clip-{i+1}">
+                <name>Camera_{i+1}</name>
+                <enabled>TRUE</enabled>
+                <duration>{total_duration_frames}</duration>
+                <rate>
+                  <timebase>{self.fps}</timebase>
+                  <ntsc>{self.ntsc}</ntsc>
+                </rate>
+                <start>0</start>
+                <end>{total_duration_frames}</end>
+                <in>0</in>
+                <out>{total_duration_frames}</out>
+                <file id="file-{i+1}"/>
+                <sourcetrack>
+                  <mediatype>video</mediatype>
+                  <trackindex>1</trackindex>
+                </sourcetrack>
+                <logginginfo>
+                  <description></description>
+                  <scene></scene>
+                  <shottake></shottake>
+                  <lognote></lognote>
+                  <good></good>
+                  <originalvideofilename></originalvideofilename>
+                  <originalaudiofilename></originalaudiofilename>
+                </logginginfo>
+                <colorinfo>
+                  <lut></lut>
+                  <lut1></lut1>
+                  <asc_sop></asc_sop>
+                  <asc_sat></asc_sat>
+                  <lut2></lut2>
+                </colorinfo>
+              </clipitem>
+            </track>"""
             
             return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE xmeml>
@@ -570,11 +635,7 @@ class XMLExporter:
                 <fielddominance>none</fielddominance>
                 <colordepth>24</colordepth>
               </samplecharacteristics>
-            </format>
-            <track>
-              <enabled>TRUE</enabled>
-              <locked>FALSE</locked>{video_clips}
-            </track>
+            </format>{video_tracks}
           </video>
           <audio>
             <numOutputChannels>2</numOutputChannels>
@@ -649,19 +710,31 @@ class XMLExporter:
             logger.error(f"Failed to save XML file: {e}")
             raise
 
-# Simple convenience function
+# Enhanced convenience function with video groups support
 def export_script_to_xml(script: GeneratedScript, video_paths: Union[str, List[str]], 
-                        output_path: str, fps: int = 24, sequence_name: str = "SmartEdit") -> bool:
+                        output_path: str, fps: int = 24, sequence_name: str = "SmartEdit",
+                        video_groups: Optional[Dict[str, List[str]]] = None) -> bool:
     """
-    Simple function to export script to XML with better Premiere compatibility
+    Export script to XML with video groups support and better Premiere compatibility
+    
+    Args:
+        script: Generated script with segments
+        video_paths: List of video file paths
+        output_path: Output XML file path
+        fps: Frame rate (default 24)
+        sequence_name: Name for the sequence
+        video_groups: Dictionary mapping group names to video paths
+                     e.g., {"Single": [path1], "Multicam A": [path2, path3]}
     """
     exporter = XMLExporter(fps=fps)
-    return exporter.export_script(script, video_paths, output_path, sequence_name)
+    return exporter.export_script(script, video_paths, output_path, sequence_name, video_groups)
 
 # Example usage
 if __name__ == "__main__":
-    print("Enhanced XML Export Module - Fixed Bugs!")
+    print("Enhanced XML Export Module - Now with Video Groups Support!")
     print("Key improvements:")
+    print("- Added video_groups parameter support")
+    print("- Smart multicam handling based on groups")
     print("- Fixed XML structure and nesting")
     print("- Consistent element naming")
     print("- Proper masterclip references")
