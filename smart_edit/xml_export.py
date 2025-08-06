@@ -546,7 +546,7 @@ class XMLExporter:
               <width>{self.width}</width>
               <height>{self.height}</height>
               <anamorphic>FALSE</anamorphic>
-              <pixelaspectratio>square</pixelaspectrario>
+              <pixelaspectratio>square</pixelaspectratio>
               <fielddominance>none</fielddominance>
             </samplecharacteristics>
           </video>
