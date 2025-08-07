@@ -488,141 +488,52 @@ class XMLExporter:
 </xmeml>"""
     
     def _create_multicam_xml(self, segments: List[ScriptSegment], video_paths: List[str], sequence_name: str) -> str:
-        """Generate multicam XML - enhanced implementation with group support"""
-        
-        logger.info(f"Creating multicam XML with {len(video_paths)} cameras")
-        
-        try:
-            # Calculate the full duration we need to cover
-            max_duration = 0
-            for segment in segments:
-                end_time = getattr(segment, 'end_time', 0.0)
-                max_duration = max(max_duration, end_time)
-            
-            # Ensure we have a minimum duration
-            if max_duration <= 0:
-                max_duration = 600  # Default 10 minutes if no segments
-            
-            total_duration_frames = int(max_duration * self.fps)
-            sequence_uuid = str(uuid.uuid4())
-            
-            # Create file definitions for all cameras
-            file_definitions = ""
-            for i, video_path in enumerate(video_paths):
-                try:
-                    video_file = Path(video_path)
-                    if not video_file.exists():
-                        logger.warning(f"Video file not found: {video_path}")
-                        continue
-                        
-                    file_uri = video_file.absolute().as_uri()
-                    file_name = video_file.name
-                    
-                    file_definitions += f"""
-      <file id="file-{i+1}">
-        <name>{file_name}</name>
-        <pathurl>{file_uri}</pathurl>
-        <rate>
-          <timebase>{self.fps}</timebase>
-          <ntsc>{self.ntsc}</ntsc>
-        </rate>
-        <duration>{total_duration_frames}</duration>
-        <timecode>
+      """Generate multicam XML with cuts based on script segments"""
+    
+      logger.info(f"Creating multicam XML with {len(video_paths)} cameras and {len(segments)} cut segments")
+      
+      try:
+          # Calculate source duration
+          max_source_time = 0
+          for segment in segments:
+              end_time = getattr(segment, 'end_time', 0.0)
+              max_source_time = max(max_source_time, end_time)
+          
+          source_duration_frames = int((max_source_time + 300) * self.fps)  # Add 5 min buffer
+          sequence_uuid = str(uuid.uuid4())
+          
+          # Create file definitions for all cameras
+          file_definitions = ""
+          for i, video_path in enumerate(video_paths):
+              try:
+                  video_file = Path(video_path)
+                  if not video_file.exists():
+                      logger.warning(f"Video file not found: {video_path}")
+                      continue
+                      
+                  file_uri = video_file.absolute().as_uri()
+                  file_name = video_file.name
+                  
+                  file_definitions += f"""
+        <file id="file-{i+1}">
+          <name>{file_name}</name>
+          <pathurl>{file_uri}</pathurl>
           <rate>
             <timebase>{self.fps}</timebase>
             <ntsc>{self.ntsc}</ntsc>
           </rate>
-          <string>00:00:00:00</string>
-          <frame>0</frame>
-          <displayformat>NDF</displayformat>
-        </timecode>
-        <media>
-          <video>
-            <samplecharacteristics>
-              <rate>
-                <timebase>{self.fps}</timebase>
-                <ntsc>{self.ntsc}</ntsc>
-              </rate>
-              <width>{self.width}</width>
-              <height>{self.height}</height>
-              <anamorphic>FALSE</anamorphic>
-              <pixelaspectratio>square</pixelaspectratio>
-              <fielddominance>none</fielddominance>
-            </samplecharacteristics>
-          </video>
-          <audio>
-            <samplecharacteristics>
-              <depth>16</depth>
-              <samplerate>48000</samplerate>
-            </samplecharacteristics>
-            <channelcount>2</channelcount>
-          </audio>
-        </media>
-      </file>"""
-                except Exception as e:
-                    logger.error(f"Error processing video file {video_path}: {e}")
-                    continue
-            
-            # Create video tracks for each camera (simplified multicam approach)
-            video_tracks = ""
-            for i in range(len(video_paths)):
-                video_tracks += f"""
-            <track>
-              <enabled>TRUE</enabled>
-              <locked>FALSE</locked>
-              <clipitem id="multicam-clip-{i+1}">
-                <name>Camera_{i+1}</name>
-                <enabled>TRUE</enabled>
-                <duration>{total_duration_frames}</duration>
-                <rate>
-                  <timebase>{self.fps}</timebase>
-                  <ntsc>{self.ntsc}</ntsc>
-                </rate>
-                <start>0</start>
-                <end>{total_duration_frames}</end>
-                <in>0</in>
-                <out>{total_duration_frames}</out>
-                <file id="file-{i+1}"/>
-                <sourcetrack>
-                  <mediatype>video</mediatype>
-                  <trackindex>1</trackindex>
-                </sourcetrack>
-                <logginginfo>
-                  <description></description>
-                  <scene></scene>
-                  <shottake></shottake>
-                  <lognote></lognote>
-                  <good></good>
-                  <originalvideofilename></originalvideofilename>
-                  <originalaudiofilename></originalaudiofilename>
-                </logginginfo>
-                <colorinfo>
-                  <lut></lut>
-                  <lut1></lut1>
-                  <asc_sop></asc_sop>
-                  <asc_sat></asc_sat>
-                  <lut2></lut2>
-                </colorinfo>
-              </clipitem>
-            </track>"""
-            
-            return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE xmeml>
-<xmeml version="4">
-  <project>
-    <name>{sequence_name}_Multicam_Project</name>
-    <children>{file_definitions}
-      <sequence id="sequence-1">
-        <uuid>{sequence_uuid}</uuid>
-        <name>{sequence_name}_Multicam_Timeline</name>
-        <duration>{total_duration_frames}</duration>
-        <rate>
-          <timebase>{self.fps}</timebase>
-          <ntsc>{self.ntsc}</ntsc>
-        </rate>
-        <media>
-          <video>
-            <format>
+          <duration>{source_duration_frames}</duration>
+          <timecode>
+            <rate>
+              <timebase>{self.fps}</timebase>
+              <ntsc>{self.ntsc}</ntsc>
+            </rate>
+            <string>00:00:00:00</string>
+            <frame>0</frame>
+            <displayformat>NDF</displayformat>
+          </timecode>
+          <media>
+            <video>
               <samplecharacteristics>
                 <rate>
                   <timebase>{self.fps}</timebase>
@@ -633,70 +544,224 @@ class XMLExporter:
                 <anamorphic>FALSE</anamorphic>
                 <pixelaspectratio>square</pixelaspectratio>
                 <fielddominance>none</fielddominance>
-                <colordepth>24</colordepth>
               </samplecharacteristics>
-            </format>{video_tracks}
-          </video>
-          <audio>
-            <numOutputChannels>2</numOutputChannels>
-            <format>
+            </video>
+            <audio>
               <samplecharacteristics>
                 <depth>16</depth>
                 <samplerate>48000</samplerate>
               </samplecharacteristics>
-            </format>
-            <outputs>
-              <group>
-                <index>1</index>
-                <numchannels>1</numchannels>
-                <downmix>0</downmix>
-                <channel>
-                  <index>1</index>
-                </channel>
-              </group>
-              <group>
-                <index>2</index>
-                <numchannels>1</numchannels>
-                <downmix>0</downmix>
-                <channel>
-                  <index>2</index>
-                </channel>
-              </group>
-            </outputs>
-            <track>
-              <enabled>TRUE</enabled>
-              <locked>FALSE</locked>
-              <outputchannelindex>1</outputchannelindex>
-            </track>
-          </audio>
-        </media>
-        <timecode>
+              <channelcount>2</channelcount>
+            </audio>
+          </media>
+        </file>"""
+              except Exception as e:
+                  logger.error(f"Error processing video file {video_path}: {e}")
+                  continue
+          
+          # Create video tracks for each camera with segmented clips
+          video_tracks = ""
+          for i in range(len(video_paths)):
+              # Generate segmented clips for this camera
+              camera_clips = ""
+              timeline_position = 0
+              
+              for seg_index, segment in enumerate(segments):
+                  start_time = getattr(segment, 'start_time', 0.0)
+                  end_time = getattr(segment, 'end_time', start_time + 1.0)
+                  
+                  # Convert to frames
+                  source_in_frames = int(start_time * self.fps)
+                  source_out_frames = int(end_time * self.fps)
+                  duration_frames = source_out_frames - source_in_frames
+                  
+                  if duration_frames <= 0:
+                      continue
+                  
+                  camera_clips += f"""
+                <clipitem id="cam{i+1}-segment-{seg_index+1}">
+                  <name>Camera_{i+1}_Segment_{seg_index+1}</name>
+                  <enabled>TRUE</enabled>
+                  <duration>{duration_frames}</duration>
+                  <rate>
+                    <timebase>{self.fps}</timebase>
+                    <ntsc>{self.ntsc}</ntsc>
+                  </rate>
+                  <start>{timeline_position}</start>
+                  <end>{timeline_position + duration_frames}</end>
+                  <in>{source_in_frames}</in>
+                  <out>{source_out_frames}</out>
+                  <file id="file-{i+1}"/>
+                  <sourcetrack>
+                    <mediatype>video</mediatype>
+                    <trackindex>1</trackindex>
+                  </sourcetrack>
+                  <logginginfo>
+                    <description></description>
+                    <scene></scene>
+                    <shottake></shottake>
+                    <lognote></lognote>
+                    <good></good>
+                    <originalvideofilename></originalvideofilename>
+                    <originalaudiofilename></originalaudiofilename>
+                  </logginginfo>
+                  <colorinfo>
+                    <lut></lut>
+                    <lut1></lut1>
+                    <asc_sop></asc_sop>
+                    <asc_sat></asc_sat>
+                    <lut2></lut2>
+                  </colorinfo>
+                </clipitem>"""
+                  
+                  timeline_position += duration_frames
+              
+              video_tracks += f"""
+              <track>
+                <enabled>TRUE</enabled>
+                <locked>FALSE</locked>{camera_clips}
+              </track>"""
+          
+          # Create audio track with segmented clips (using first camera)
+          audio_clips = ""
+          timeline_position = 0
+          
+          for seg_index, segment in enumerate(segments):
+              start_time = getattr(segment, 'start_time', 0.0)
+              end_time = getattr(segment, 'end_time', start_time + 1.0)
+              
+              source_in_frames = int(start_time * self.fps)
+              source_out_frames = int(end_time * self.fps)
+              duration_frames = source_out_frames - source_in_frames
+              
+              if duration_frames <= 0:
+                  continue
+              
+              audio_clips += f"""
+                <clipitem id="audio-segment-{seg_index+1}">
+                  <name>Audio_Segment_{seg_index+1}</name>
+                  <enabled>TRUE</enabled>
+                  <duration>{duration_frames}</duration>
+                  <rate>
+                    <timebase>{self.fps}</timebase>
+                    <ntsc>{self.ntsc}</ntsc>
+                  </rate>
+                  <start>{timeline_position}</start>
+                  <end>{timeline_position + duration_frames}</end>
+                  <in>{source_in_frames}</in>
+                  <out>{source_out_frames}</out>
+                  <file id="file-1"/>
+                  <sourcetrack>
+                    <mediatype>audio</mediatype>
+                    <trackindex>1</trackindex>
+                  </sourcetrack>
+                  <logginginfo>
+                    <description></description>
+                    <scene></scene>
+                    <shottake></shottake>
+                    <lognote></lognote>
+                    <good></good>
+                    <originalvideofilename></originalvideofilename>
+                    <originalaudiofilename></originalaudiofilename>
+                  </logginginfo>
+                </clipitem>"""
+              
+              timeline_position += duration_frames
+          
+          # Calculate total timeline duration
+          total_timeline_frames = timeline_position
+          
+          return f"""<?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE xmeml>
+  <xmeml version="4">
+    <project>
+      <name>{sequence_name}_Multicam_Project</name>
+      <children>{file_definitions}
+        <sequence id="sequence-1">
+          <uuid>{sequence_uuid}</uuid>
+          <name>{sequence_name}_Multicam_Timeline</name>
+          <duration>{total_timeline_frames}</duration>
           <rate>
             <timebase>{self.fps}</timebase>
             <ntsc>{self.ntsc}</ntsc>
           </rate>
-          <string>00:00:00:00</string>
-          <frame>0</frame>
-          <displayformat>NDF</displayformat>
-        </timecode>
-        <logginginfo>
-          <description></description>
-          <scene></scene>
-          <shottake></shottake>
-          <lognote></lognote>
-          <good></good>
-          <originalvideofilename></originalvideofilename>
-          <originalaudiofilename></originalaudiofilename>
-        </logginginfo>
-      </sequence>
-    </children>
-  </project>
-</xmeml>"""
+          <media>
+            <video>
+              <format>
+                <samplecharacteristics>
+                  <rate>
+                    <timebase>{self.fps}</timebase>
+                    <ntsc>{self.ntsc}</ntsc>
+                  </rate>
+                  <width>{self.width}</width>
+                  <height>{self.height}</height>
+                  <anamorphic>FALSE</anamorphic>
+                  <pixelaspectratio>square</pixelaspectratio>
+                  <fielddominance>none</fielddominance>
+                  <colordepth>24</colordepth>
+                </samplecharacteristics>
+              </format>{video_tracks}
+            </video>
+            <audio>
+              <numOutputChannels>2</numOutputChannels>
+              <format>
+                <samplecharacteristics>
+                  <depth>16</depth>
+                  <samplerate>48000</samplerate>
+                </samplecharacteristics>
+              </format>
+              <outputs>
+                <group>
+                  <index>1</index>
+                  <numchannels>1</numchannels>
+                  <downmix>0</downmix>
+                  <channel>
+                    <index>1</index>
+                  </channel>
+                </group>
+                <group>
+                  <index>2</index>
+                  <numchannels>1</numchannels>
+                  <downmix>0</downmix>
+                  <channel>
+                    <index>2</index>
+                  </channel>
+                </group>
+              </outputs>
+              <track>
+                <enabled>TRUE</enabled>
+                <locked>FALSE</locked>
+                <outputchannelindex>1</outputchannelindex>{audio_clips}
+              </track>
+            </audio>
+          </media>
+          <timecode>
+            <rate>
+              <timebase>{self.fps}</timebase>
+              <ntsc>{self.ntsc}</ntsc>
+            </rate>
+            <string>00:00:00:00</string>
+            <frame>0</frame>
+            <displayformat>NDF</displayformat>
+          </timecode>
+          <logginginfo>
+            <description></description>
+            <scene></scene>
+            <shottake></shottake>
+            <lognote></lognote>
+            <good></good>
+            <originalvideofilename></originalvideofilename>
+            <originalaudiofilename></originalaudiofilename>
+          </logginginfo>
+        </sequence>
+      </children>
+    </project>
+  </xmeml>"""
         
-        except Exception as e:
-            logger.error(f"Error creating multicam XML: {e}")
-            # Fall back to single cam
-            return self._create_single_cam_xml(segments, video_paths[0], sequence_name)
+      except Exception as e:
+          logger.error(f"Error creating multicam XML: {e}")
+          # Fall back to single cam
+          return self._create_single_cam_xml(segments, video_paths[0], sequence_name)
     
     def _save_xml(self, xml_content: str, output_path: str):
         """Save XML to file"""
