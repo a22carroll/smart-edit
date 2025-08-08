@@ -1,8 +1,8 @@
 """
-Smart Edit Core Pipeline - Updated for Prompt-Driven Workflow
+Smart Edit Core Pipeline - Updated for EDL Export
 
-Orchestrates the complete video processing workflow from raw videos to final XML export.
-Now supports user prompt-driven script generation instead of automatic processing.
+Orchestrates the complete video processing workflow from raw videos to final EDL export.
+Supports user prompt-driven script generation workflow.
 """
 
 import os
@@ -61,8 +61,7 @@ except ImportError:
 try:
     from transcription import transcribe_video, TranscriptionConfig, TranscriptionResult
     from script_generation import GeneratedScript, generate_script_from_prompt
-    # Note: XML export will need to be updated for GeneratedScript format
-    # from xml_export import export_single_cam_xml, export_multicam_xml
+    from edl_export import export_script_to_edl
 except ImportError as e:
     print(f"Warning: Import error - {e}")
 
@@ -71,7 +70,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SmartEditPipeline:
-    """Main processing pipeline for Smart Edit - Prompt-Driven Version"""
+    """Main processing pipeline for Smart Edit - EDL Export Version"""
     
     def __init__(self, progress_callback: Optional[Callable[[str, float], None]] = None):
         """
@@ -105,7 +104,6 @@ class SmartEditPipeline:
             self.current_project = {
                 "name": project_name,
                 "video_paths": video_paths,
-                "is_multicam": len(video_paths) > 1,
                 "transcription_results": [],
                 "generated_script": None
             }
@@ -240,16 +238,18 @@ class SmartEditPipeline:
     def export_generated_script(
         self,
         output_path: str,
+        video_paths: List[str],
         generated_script: Optional[GeneratedScript] = None,
-        export_format: str = "premiere_xml"
+        export_format: str = "edl"
     ) -> ProcessingResult:
         """
         Export generated script to specified format
         
         Args:
             output_path: Output file path
+            video_paths: List of video file paths (required for EDL export)
             generated_script: Script to export (uses current project if None)
-            export_format: Export format ("premiere_xml", "text", "json")
+            export_format: Export format ("edl", "text", "json")
             
         Returns:
             ProcessingResult with export status
@@ -280,10 +280,8 @@ class SmartEditPipeline:
             elif export_format == "json":
                 self._export_json_script(script, output_path)
                 
-            elif export_format == "premiere_xml":
-                # TODO: Implement XML export for GeneratedScript
-                # For now, export as detailed text representation
-                self._export_premiere_placeholder(script, output_path)
+            elif export_format == "edl":
+                self._export_edl_script(script, output_path, video_paths)
                 
             else:
                 raise ValueError(f"Unsupported export format: {export_format}")
@@ -307,11 +305,25 @@ class SmartEditPipeline:
             self._update_progress(f"Export failed: {str(e)}", 0.0, ProcessingStage.FAILED)
             return ProcessingResult.error_result(ProcessingStage.EXPORTING, e)
     
+    def _export_edl_script(self, script: GeneratedScript, output_path: str, video_paths: List[str]):
+        """Export script as EDL"""
+        sequence_name = Path(output_path).stem
+        
+        success = export_script_to_edl(
+            script=script,
+            video_paths=video_paths,
+            output_path=output_path,
+            sequence_name=sequence_name
+        )
+        
+        if not success:
+            raise RuntimeError("EDL export failed - check EDL export module logs for details")
+    
     def _export_text_script(self, script: GeneratedScript, output_path: str):
         """Export script as readable text"""
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(f"Smart Edit Generated Script\n")
-            f.write(f"=" * 50 + "\n\n")
+            f.write("Smart Edit Generated Script\n")
+            f.write("=" * 50 + "\n\n")
             
             # Script metadata
             f.write(f"Title: {getattr(script, 'title', 'Untitled')}\n")
@@ -372,34 +384,6 @@ class SmartEditPipeline:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(script_dict, f, indent=2, ensure_ascii=False, default=str)
     
-    def _export_premiere_placeholder(self, script: GeneratedScript, output_path: str):
-        """Export placeholder XML (until full XML export is implemented)"""
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-            f.write('<!-- Smart Edit Generated Timeline -->\n')
-            f.write('<!-- This is a placeholder format until full XML export is implemented -->\n\n')
-            
-            f.write('<smart_edit_timeline>\n')
-            f.write(f'  <title>{getattr(script, "title", "Untitled")}</title>\n')
-            f.write(f'  <duration_minutes>{getattr(script, "target_duration_minutes", 0)}</duration_minutes>\n')
-            f.write(f'  <user_prompt><![CDATA[{getattr(script, "user_prompt", "")}]]></user_prompt>\n')
-            
-            segments = getattr(script, 'segments', [])
-            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
-            
-            f.write('  <timeline>\n')
-            for segment in selected_segments:
-                start_time = getattr(segment, 'start_time', 0)
-                end_time = getattr(segment, 'end_time', 0)
-                content = getattr(segment, 'content', '')
-                video_idx = getattr(segment, 'video_index', 0)
-                
-                f.write(f'    <segment video="{video_idx + 1}" start="{start_time:.2f}" end="{end_time:.2f}">\n')
-                f.write(f'      <content><![CDATA[{content}]]></content>\n')
-                f.write('    </segment>\n')
-            f.write('  </timeline>\n')
-            f.write('</smart_edit_timeline>\n')
-    
     def _update_progress(self, message: str, percent: float, stage: ProcessingStage):
         """Update progress tracking"""
         # Call progress callback if provided
@@ -416,7 +400,6 @@ class SmartEditPipeline:
         return {
             "project_name": self.current_project.get("name", "Unknown"),
             "video_count": len(self.current_project.get("video_paths", [])),
-            "is_multicam": self.current_project.get("is_multicam", False),
             "has_transcription": bool(self.current_project.get("transcription_results")),
             "has_script": bool(self.current_project.get("generated_script"))
         }
@@ -466,8 +449,9 @@ def quick_generate_script(
 
 def quick_export_script(
     generated_script: GeneratedScript,
+    video_paths: List[str],
     output_path: str,
-    export_format: str = "premiere_xml",
+    export_format: str = "edl",
     progress_callback: Optional[Callable[[str, float], None]] = None
 ) -> ProcessingResult:
     """
@@ -475,15 +459,16 @@ def quick_export_script(
     
     Args:
         generated_script: Script to export
+        video_paths: List of video file paths (required for EDL export)
         output_path: Output file path
-        export_format: Export format ("premiere_xml", "text", "json")
+        export_format: Export format ("edl", "text", "json")
         progress_callback: Optional progress callback
         
     Returns:
         ProcessingResult with export status
     """
     pipeline = SmartEditPipeline(progress_callback)
-    return pipeline.export_generated_script(output_path, generated_script, export_format)
+    return pipeline.export_generated_script(output_path, video_paths, generated_script, export_format)
 
 # Example usage
 if __name__ == "__main__":
@@ -514,17 +499,20 @@ if __name__ == "__main__":
         if result2.success:
             print("✅ Script generated")
             
-            # Step 3: Export
-            print("Step 3: Exporting...")
+            # Step 3: Export to EDL
+            print("Step 3: Exporting to EDL...")
+            # Fixed: Pass video paths to export function
+            video_paths = ["video1.mp4", "video2.mp4"]  # Would come from transcription step
             result3 = quick_export_script(
                 result2.data,
-                "output.xml",
-                "premiere_xml",
+                video_paths,
+                "output.edl",
+                "edl",
                 progress_update
             )
             
             if result3.success:
-                print("✅ Export completed")
+                print("✅ EDL export completed")
             else:
                 print(f"❌ Export failed: {result3.message}")
         else:

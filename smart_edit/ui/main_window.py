@@ -1,7 +1,8 @@
 """
-Smart Edit Main Window - Fixed with Multicam Grouping
+Smart Edit Main Window - Cleaned and Bug-free Version
 
 Main application window for the Smart Edit video editing system.
+Exports to EDL format with improved error handling and removed unnecessary code.
 """
 
 import os
@@ -22,11 +23,11 @@ sys.path.insert(0, parent_dir)
 try:
     from transcription import transcribe_video
     from ui.script_editor import show_script_editor
-    from xml_export import export_script_to_xml
-    XML_EXPORT_AVAILABLE = True
+    from edl_export import export_script_to_edl
+    EDL_EXPORT_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Import error - {e}")
-    XML_EXPORT_AVAILABLE = False
+    EDL_EXPORT_AVAILABLE = False
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,16 @@ logger = logging.getLogger(__name__)
 class SmartEditMainWindow:
     """Main application window for Smart Edit"""
     
+    # UI Constants
+    LISTBOX_HEIGHT = 6
+    PROJECT_NAME_WIDTH = 25
+    RESULTS_TEXT_HEIGHT = 12
+    RESULTS_TEXT_WIDTH = 60
+    LOG_TEXT_HEIGHT = 8
+    
+    # Supported video formats
+    VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm']
+    
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Smart Edit - AI Video Editor")
@@ -42,8 +53,6 @@ class SmartEditMainWindow:
         
         # Application state
         self.video_files = []
-        self.video_groups = {}  # Track which group each video belongs to {video_path: group_name}
-        self.selected_video_index = -1  # Track currently selected video
         self.transcription_results = []
         self.generated_script = None
         self.processing_thread = None
@@ -90,35 +99,22 @@ class SmartEditMainWindow:
         project_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         ttk.Label(project_frame, text="Project Name:").pack(side=tk.LEFT)
         self.project_name_var = tk.StringVar(value=self.project_name)
-        ttk.Entry(project_frame, textvariable=self.project_name_var, width=25).pack(
+        ttk.Entry(project_frame, textvariable=self.project_name_var, width=self.PROJECT_NAME_WIDTH).pack(
             side=tk.LEFT, padx=(5, 0), fill=tk.X, expand=True)
         self.project_name_var.trace('w', self._on_project_name_change)
         
-        # File list with grouping
+        # File list
         ttk.Label(left_frame, text="Selected Videos:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
         
         listbox_frame = ttk.Frame(left_frame)
         listbox_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         listbox_frame.columnconfigure(0, weight=1)
         
-        self.file_listbox = tk.Listbox(listbox_frame, height=6)
+        self.file_listbox = tk.Listbox(listbox_frame, height=self.LISTBOX_HEIGHT)
         self.file_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        self.file_listbox.bind('<<ListboxSelect>>', self._on_file_select)
-        
-        # Group dropdown for selected file
-        group_frame = ttk.Frame(listbox_frame)
-        group_frame.grid(row=0, column=1, sticky=(tk.N, tk.S), padx=(5, 0))
-        
-        ttk.Label(group_frame, text="Group:", font=("Arial", 8)).pack()
-        self.group_var = tk.StringVar(value="Single")
-        self.group_combo = ttk.Combobox(group_frame, textvariable=self.group_var, 
-                                       values=["Single", "Multicam A", "Multicam B", "Multicam C"], 
-                                       width=10, state="readonly")
-        self.group_combo.pack(pady=(2, 0))
-        self.group_combo.bind('<<ComboboxSelected>>', self._on_group_change)
         
         scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
-        scrollbar.grid(row=0, column=2, sticky=(tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.file_listbox.configure(yscrollcommand=scrollbar.set)
         
         # File buttons
@@ -146,8 +142,8 @@ class SmartEditMainWindow:
         ttk.Separator(left_frame, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
         ttk.Label(left_frame, text="Export:", font=("Arial", 12, "bold")).grid(row=10, column=0, sticky=tk.W, pady=(0, 10))
         
-        export_text = "📤 Export XML" if XML_EXPORT_AVAILABLE else "📤 Export (Text Only)"
-        self.export_button = ttk.Button(left_frame, text=export_text, command=self.export_xml, state=tk.DISABLED)
+        export_text = "📤 Export EDL" if EDL_EXPORT_AVAILABLE else "📤 Export (Text Only)"
+        self.export_button = ttk.Button(left_frame, text=export_text, command=self.export_edl, state=tk.DISABLED)
         self.export_button.grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E))
     
     def _setup_right_panel(self, parent):
@@ -159,14 +155,16 @@ class SmartEditMainWindow:
         right_frame.rowconfigure(2, weight=1)
         
         # Results display
-        self.results_text = ScrolledText(right_frame, height=12, width=60, state=tk.DISABLED)
+        self.results_text = ScrolledText(right_frame, height=self.RESULTS_TEXT_HEIGHT, 
+                                        width=self.RESULTS_TEXT_WIDTH, state=tk.DISABLED)
         self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
         # Log label
         ttk.Label(right_frame, text="Processing Log:").grid(row=1, column=0, sticky=tk.W, pady=(10, 5))
         
         # Log display
-        self.log_text = ScrolledText(right_frame, height=8, width=60, state=tk.DISABLED)
+        self.log_text = ScrolledText(right_frame, height=self.LOG_TEXT_HEIGHT, 
+                                    width=self.RESULTS_TEXT_WIDTH, state=tk.DISABLED)
         self.log_text.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     
     def _setup_menu(self):
@@ -192,63 +190,34 @@ class SmartEditMainWindow:
         """Handle project name changes"""
         self.project_name = self.project_name_var.get() or "Untitled Project"
     
-    def _on_file_select(self, event=None):
-        """Handle file selection in listbox"""
-        try:
-            selection = self.file_listbox.curselection()
-            if selection:
-                index = selection[0]
-                if 0 <= index < len(self.video_files):
-                    self.selected_video_index = index
-                    video_path = self.video_files[index]
-                    current_group = self.video_groups.get(video_path, "Single")
-                    self.group_var.set(current_group)
-            else:
-                self.selected_video_index = -1
-                self.group_var.set("Single")
-        except Exception as e:
-            self.log_message(f"⚠️ Error in file selection: {e}")
+    def _is_video_file(self, file_path):
+        """Check if file is a supported video format"""
+        return Path(file_path).suffix.lower() in self.VIDEO_EXTENSIONS
     
-    def _on_group_change(self, event=None):
-        """Handle group assignment change"""
+    def _format_file_size(self, file_path):
+        """Get formatted file size string"""
         try:
-            if self.selected_video_index >= 0 and self.selected_video_index < len(self.video_files):
-                index = self.selected_video_index
-                video_path = self.video_files[index]
-                new_group = self.group_var.get()
-                old_group = self.video_groups.get(video_path, "Single")
-                
-                if new_group != old_group:
-                    # Update group assignment
-                    self.video_groups[video_path] = new_group
-                    
-                    # Update listbox display
-                    filename = os.path.basename(video_path)
-                    try:
-                        size_mb = os.path.getsize(video_path) / (1024 * 1024)
-                        display_name = f"{filename} ({size_mb:.1f} MB) [{new_group}]"
-                    except:
-                        display_name = f"{filename} [{new_group}]"
-                    
-                    # Safely update listbox
-                    if 0 <= index < self.file_listbox.size():
-                        self.file_listbox.delete(index)
-                        self.file_listbox.insert(index, display_name)
-                        self.file_listbox.select_set(index)
-                    
-                    self.log_message(f"📁 {filename}: {old_group} → {new_group}")
-        except Exception as e:
-            self.log_message(f"⚠️ Error changing group: {e}")
+            size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            return f"({size_mb:.1f} MB)"
+        except OSError:
+            return "(unknown size)"
     
-    def _get_video_groups(self):
-        """Get videos organized by groups for export"""
-        groups = {}
-        for video_path in self.video_files:
-            group = self.video_groups.get(video_path, "Single")
-            if group not in groups:
-                groups[group] = []
-            groups[group].append(video_path)
-        return groups
+    def _handle_error(self, operation, error, show_dialog=True):
+        """Centralized error handling"""
+        error_msg = f"{operation} failed: {str(error)}"
+        self.log_message(f"❌ {error_msg}")
+        logger.error(f"{operation} error: {error}")
+        
+        if show_dialog:
+            messagebox.showerror(f"{operation} Error", error_msg)
+    
+    def _update_ui_safe(self, update_func):
+        """Safely update UI from thread"""
+        try:
+            self.root.after(0, update_func)
+        except tk.TclError:
+            # Window might be closed
+            pass
     
     def new_project(self):
         """Start a new project"""
@@ -267,22 +236,26 @@ class SmartEditMainWindow:
         files = filedialog.askopenfilenames(title="Select Video Files", filetypes=filetypes)
         
         added_count = 0
-        for file_path in files:
-            if file_path not in self.video_files:
-                self.video_files.append(file_path)
-                # Default new videos to "Single" group
-                self.video_groups[file_path] = "Single"
-                
-                filename = os.path.basename(file_path)
-                try:
-                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    display_name = f"{filename} ({size_mb:.1f} MB) [Single]"
-                except:
-                    display_name = f"{filename} [Single]"
-                
-                self.file_listbox.insert(tk.END, display_name)
-                added_count += 1
+        invalid_files = []
         
+        for file_path in files:
+            if file_path in self.video_files:
+                continue
+                
+            # Validate video file
+            if not self._is_video_file(file_path):
+                invalid_files.append(os.path.basename(file_path))
+                continue
+            
+            self.video_files.append(file_path)
+            filename = os.path.basename(file_path)
+            size_str = self._format_file_size(file_path)
+            display_name = f"{filename} {size_str}"
+            
+            self.file_listbox.insert(tk.END, display_name)
+            added_count += 1
+        
+        # Show results
         if added_count > 0:
             self.update_status(f"{len(self.video_files)} video(s) loaded")
             self.log_message(f"📁 Added {added_count} video file(s)")
@@ -292,35 +265,35 @@ class SmartEditMainWindow:
                 first_video = Path(self.video_files[0]).stem
                 self.project_name = f"{first_video}_edit"
                 self.project_name_var.set(self.project_name)
+        
+        # Warn about invalid files
+        if invalid_files:
+            invalid_list = ', '.join(invalid_files[:3])
+            if len(invalid_files) > 3:
+                invalid_list += f" and {len(invalid_files) - 3} more"
+            messagebox.showwarning("Invalid Files", 
+                                 f"Skipped non-video files: {invalid_list}")
     
     def remove_video(self):
         """Remove selected video from the list"""
         selection = self.file_listbox.curselection()
-        if selection:
-            index = selection[0]
-            if 0 <= index < len(self.video_files):  # Bounds check
-                self.file_listbox.delete(index)
-                removed_file = self.video_files.pop(index)
-                # Remove from groups tracking
-                if removed_file in self.video_groups:
-                    del self.video_groups[removed_file]
-                self.log_message(f"🗑️ Removed: {os.path.basename(removed_file)}")
-                self.update_status(f"{len(self.video_files)} video(s) loaded")
-                
-                # Reset selection state
-                self.selected_video_index = -1
-                self.group_var.set("Single")
-                
-                if not self.video_files:
-                    self._reset_processing_state()
+        if not selection:
+            return
+            
+        index = selection[0]
+        if 0 <= index < len(self.video_files):
+            self.file_listbox.delete(index)
+            removed_file = self.video_files.pop(index)
+            self.log_message(f"🗑️ Removed: {os.path.basename(removed_file)}")
+            self.update_status(f"{len(self.video_files)} video(s) loaded")
+            
+            if not self.video_files:
+                self._reset_processing_state()
     
     def clear_videos(self):
         """Clear all videos from the list"""
         self.video_files.clear()
-        self.video_groups.clear()
-        self.selected_video_index = -1
         self.file_listbox.delete(0, tk.END)
-        self.group_var.set("Single")
         self._reset_processing_state()
         self.update_status("Ready - Load video files to begin")
         self.log_message("🗑️ Cleared all video files")
@@ -336,10 +309,6 @@ class SmartEditMainWindow:
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete(1.0, tk.END)
         self.results_text.config(state=tk.DISABLED)
-        
-        # Reset group selection
-        self.group_var.set("Single")
-        self.selected_video_index = -1
     
     def start_transcription(self):
         """Start the video transcription process"""
@@ -372,24 +341,34 @@ class SmartEditMainWindow:
         try:
             for i, video_path in enumerate(self.video_files):
                 video_name = os.path.basename(video_path)
-                self.root.after(0, lambda v=video_name, idx=i+1, total=len(self.video_files): 
-                               self.log_message(f"🎤 Transcribing {idx}/{total}: {v}"))
                 
+                # Update progress - fixed lambda closure bug
+                def update_progress(name=video_name, idx=i+1, total=len(self.video_files)):
+                    self.log_message(f"🎤 Transcribing {idx}/{total}: {name}")
+                
+                self._update_ui_safe(update_progress)
+                
+                # Transcribe video
                 result = transcribe_video(video_path)
                 self.transcription_results.append(result)
                 
+                # Update completion - fixed lambda closure bug
                 duration_mins = result.metadata.get('total_duration', 0) / 60
                 segment_count = len(result.segments)
-                self.root.after(0, lambda v=video_name, d=duration_mins, s=segment_count:
-                               self.log_message(f"✅ Completed: {v} ({d:.1f}min, {s} segments)"))
+                
+                def update_complete(name=video_name, duration=duration_mins, segments=segment_count):
+                    self.log_message(f"✅ Completed: {name} ({duration:.1f}min, {segments} segments)")
+                
+                self._update_ui_safe(update_complete)
             
-            self.root.after(0, self._transcription_complete)
+            self._update_ui_safe(self._transcription_complete)
             
         except Exception as e:
-            error_msg = f"Transcription failed: {str(e)}"
-            self.root.after(0, lambda: self.log_message(f"❌ {error_msg}"))
-            self.root.after(0, lambda: messagebox.showerror("Transcription Error", error_msg))
-            self.root.after(0, self._transcription_failed)
+            def handle_error():
+                self._handle_error("Transcription", e)
+                self._transcription_failed()
+            
+            self._update_ui_safe(handle_error)
     
     def _transcription_complete(self):
         """Handle successful transcription completion"""
@@ -412,68 +391,51 @@ class SmartEditMainWindow:
             return
         
         try:
+            # Calculate totals
             total_duration = sum(t.metadata.get('total_duration', 0) for t in self.transcription_results)
             total_segments = sum(len(t.segments) for t in self.transcription_results)
             
-            results = [
+            # Build results text
+            results_lines = [
                 "=== TRANSCRIPTION RESULTS ===\n",
-                f"📊 PROJECT OVERVIEW:",
+                "📊 PROJECT OVERVIEW:",
                 f"  • Project: {self.project_name}",
                 f"  • Videos: {len(self.transcription_results)}",
-                f"  • Setup: {self._get_project_type_description()}",
                 f"  • Total Duration: {total_duration/60:.1f} minutes",
                 f"  • Total Segments: {total_segments}",
                 "",
                 "📹 VIDEO DETAILS:"
             ]
             
+            # Add video details
             for i, result in enumerate(self.transcription_results):
-                if i < len(self.video_files):  # Safety check
-                    video_name = os.path.basename(self.video_files[i])
-                    duration = result.metadata.get('total_duration', 0)
-                    segments = len(result.segments)
-                    language = result.metadata.get('language_detected', 'unknown')
+                if i >= len(self.video_files):  # Safety check
+                    continue
                     
-                    results.extend([
-                        f"  Video {i+1}: {video_name}",
-                        f"    • Duration: {duration/60:.1f} min, Segments: {segments}, Language: {language}"
-                    ])
+                video_name = os.path.basename(self.video_files[i])
+                duration = result.metadata.get('total_duration', 0)
+                segments = len(result.segments)
+                language = result.metadata.get('language_detected', 'unknown')
+                
+                results_lines.extend([
+                    f"  Video {i+1}: {video_name}",
+                    f"    • Duration: {duration/60:.1f} min, Segments: {segments}, Language: {language}"
+                ])
             
-            results.extend([
+            results_lines.extend([
                 "",
                 "🎬 NEXT STEP:",
                 "  Click 'Create Script' to generate your video script!"
             ])
             
+            # Update display
             self.results_text.config(state=tk.NORMAL)
             self.results_text.delete(1.0, tk.END)
-            self.results_text.insert(1.0, "\n".join(results))
+            self.results_text.insert(1.0, "\n".join(results_lines))
             self.results_text.config(state=tk.DISABLED)
+            
         except Exception as e:
             self.log_message(f"⚠️ Error updating transcription results: {e}")
-    
-    def _get_project_type_description(self):
-        """Get description of project setup"""
-        if not self.video_files:
-            return "No videos"
-        
-        try:
-            groups = self._get_video_groups()
-            descriptions = []
-            
-            for group_name, videos in groups.items():
-                if group_name == "Single":
-                    if len(videos) == 1:
-                        descriptions.append("1 single video")
-                    else:
-                        descriptions.append(f"{len(videos)} single videos")  
-                else:
-                    descriptions.append(f"{group_name}: {len(videos)} cameras")
-            
-            return " | ".join(descriptions) if descriptions else "No videos"
-        except Exception as e:
-            self.log_message(f"⚠️ Error getting project type: {e}")
-            return "Mixed content"
     
     def open_script_generator(self):
         """Open the script generator/editor window"""
@@ -500,77 +462,80 @@ class SmartEditMainWindow:
                 self.log_message("❌ Script generation cancelled")
                 
         except Exception as e:
-            error_msg = f"Script generator error: {str(e)}"
-            self.log_message(f"❌ {error_msg}")
-            messagebox.showerror("Script Generator Error", error_msg)
+            self._handle_error("Script generator", e)
     
     def _update_script_results(self):
         """Update results display with script information"""
         if not self.generated_script:
             return
         
-        segments = getattr(self.generated_script, 'segments', [])
-        selected_segments = [s for s in segments if getattr(s, 'keep', True)]
-        
-        results = [
-            "=== SCRIPT GENERATION RESULTS ===\n",
-            "📝 GENERATED SCRIPT:",
-            f"  • Title: {getattr(self.generated_script, 'title', 'Untitled')}",
-            f"  • Estimated Duration: {getattr(self.generated_script, 'estimated_duration_seconds', 0)/60:.1f} minutes",
-            f"  • Selected Segments: {len(selected_segments)} of {len(segments)}",
-            ""
-        ]
-        
-        # User prompt
-        user_prompt = getattr(self.generated_script, 'user_prompt', '')
-        if user_prompt:
-            prompt_preview = user_prompt[:100] + "..." if len(user_prompt) > 100 else user_prompt
-            results.extend([
-                "💭 USER INSTRUCTIONS:",
-                f"  \"{prompt_preview}\"",
-                ""
-            ])
-        
-        # Sample segments
-        results.append("📋 SELECTED SEGMENTS:")
-        for i, segment in enumerate(selected_segments[:5]):
-            start_time = getattr(segment, 'start_time', 0)
-            content = getattr(segment, 'content', 'No content')
-            video_idx = getattr(segment, 'video_index', 0)
+        try:
+            segments = getattr(self.generated_script, 'segments', [])
+            selected_segments = [s for s in segments if getattr(s, 'keep', True)]
             
-            video_indicator = f"[V{video_idx + 1}]" if len(self.transcription_results) > 1 else ""
-            results.append(f"  {start_time:.1f}s {video_indicator}: {content[:60]}...")
-        
-        if len(selected_segments) > 5:
-            results.append(f"  ... and {len(selected_segments) - 5} more segments")
-        
-        results.extend([
-            "",
-            "📤 READY FOR EXPORT:",
-            "  Click 'Export XML' to create project file"
-        ])
-        
-        self.results_text.config(state=tk.NORMAL)
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(1.0, "\n".join(results))
-        self.results_text.config(state=tk.DISABLED)
+            results_lines = [
+                "=== SCRIPT GENERATION RESULTS ===\n",
+                "📝 GENERATED SCRIPT:",
+                f"  • Title: {getattr(self.generated_script, 'title', 'Untitled')}",
+                f"  • Estimated Duration: {getattr(self.generated_script, 'estimated_duration_seconds', 0)/60:.1f} minutes",
+                f"  • Selected Segments: {len(selected_segments)} of {len(segments)}",
+                ""
+            ]
+            
+            # User prompt
+            user_prompt = getattr(self.generated_script, 'user_prompt', '')
+            if user_prompt:
+                prompt_preview = user_prompt[:100] + "..." if len(user_prompt) > 100 else user_prompt
+                results_lines.extend([
+                    "💭 USER INSTRUCTIONS:",
+                    f'  "{prompt_preview}"',
+                    ""
+                ])
+            
+            # Sample segments
+            results_lines.append("📋 SELECTED SEGMENTS:")
+            for i, segment in enumerate(selected_segments[:5]):
+                start_time = getattr(segment, 'start_time', 0)
+                content = getattr(segment, 'content', 'No content')
+                video_idx = getattr(segment, 'video_index', 0)
+                
+                video_indicator = f"[V{video_idx + 1}]" if len(self.transcription_results) > 1 else ""
+                results_lines.append(f"  {start_time:.1f}s {video_indicator}: {content[:60]}...")
+            
+            if len(selected_segments) > 5:
+                results_lines.append(f"  ... and {len(selected_segments) - 5} more segments")
+            
+            results_lines.extend([
+                "",
+                "📤 READY FOR EXPORT:",
+                "  Click 'Export EDL' to create edit decision list"
+            ])
+            
+            # Update display
+            self.results_text.config(state=tk.NORMAL)
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(1.0, "\n".join(results_lines))
+            self.results_text.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error updating script results: {e}")
     
-    def export_xml(self):
-        """Export the generated script to XML"""
+    def export_edl(self):
+        """Export the generated script to EDL format"""
         if not self.generated_script:
             messagebox.showwarning("No Script", "Please create a script first.")
             return
         
-        # Always export as one combined XML file with group information
-        if XML_EXPORT_AVAILABLE:
-            filetypes = [("XML files", "*.xml"), ("All files", "*.*")]
-            default_name = f"{self.project_name}.xml"
+        # Get output path
+        if EDL_EXPORT_AVAILABLE:
+            filetypes = [("EDL files", "*.edl"), ("All files", "*.*")]
+            default_name = f"{self.project_name}.edl"
         else:
             filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
             default_name = f"{self.project_name}.txt"
         
         output_path = filedialog.asksaveasfilename(
-            title="Save Export File",
+            title="Save EDL File",
             initialfile=default_name,
             filetypes=filetypes
         )
@@ -579,25 +544,21 @@ class SmartEditMainWindow:
             return
         
         try:
-            if XML_EXPORT_AVAILABLE:
-                # Get video groups for proper multicam handling
-                video_groups = self._get_video_groups()
-                
-                self.log_message("📤 Exporting combined XML...")
-                success = export_script_to_xml(
+            if EDL_EXPORT_AVAILABLE:
+                self.log_message("📤 Exporting EDL...")
+                success = export_script_to_edl(
                     script=self.generated_script,
                     video_paths=self.video_files,
                     output_path=output_path,
-                    sequence_name=os.path.splitext(os.path.basename(output_path))[0],
-                    video_groups=video_groups  # Pass groups so XML can handle multicam clips properly
+                    sequence_name=os.path.splitext(os.path.basename(output_path))[0]
                 )
                 
                 if success:
-                    self.log_message(f"✅ XML exported: {os.path.basename(output_path)}")
-                    messagebox.showinfo("Export Complete", f"XML file exported successfully!\n{output_path}")
+                    self.log_message(f"✅ EDL exported: {os.path.basename(output_path)}")
+                    messagebox.showinfo("Export Complete", f"EDL file exported successfully!\n{output_path}")
                 else:
-                    self.log_message(f"❌ XML export failed")
-                    messagebox.showerror("Export Failed", "XML export failed. Check logs for details.")
+                    self.log_message("❌ EDL export failed")
+                    messagebox.showerror("Export Failed", "EDL export failed. Check logs for details.")
             else:
                 # Fallback to text export
                 self.log_message("📤 Exporting text representation...")
@@ -606,9 +567,7 @@ class SmartEditMainWindow:
                 messagebox.showinfo("Export Complete", f"Text file exported successfully!\n{output_path}")
                 
         except Exception as e:
-            error_msg = f"Export failed: {str(e)}"
-            self.log_message(f"❌ {error_msg}")
-            messagebox.showerror("Export Error", error_msg)
+            self._handle_error("Export", e)
     
     def _export_text_representation(self, output_path):
         """Export script as text representation"""
@@ -617,11 +576,10 @@ class SmartEditMainWindow:
             f.write(f"Project: {self.project_name}\n")
             f.write(f"Videos: {len(self.video_files)}\n\n")
             
-            # List video files with groups
+            # List video files
             f.write("Video Files:\n")
             for i, video_path in enumerate(self.video_files):
-                group = self.video_groups.get(video_path, "Single")
-                f.write(f"  {i+1}. {os.path.basename(video_path)} [{group}]\n")
+                f.write(f"  {i+1}. {os.path.basename(video_path)}\n")
             
             # User prompt
             user_prompt = getattr(self.generated_script, 'user_prompt', '')
@@ -650,12 +608,11 @@ generate edit decisions from raw footage based on user instructions.
 
 WORKFLOW:
 1. Load video files
-2. Assign groups (Single or Multicam A/B/C)
-3. Transcribe with Whisper AI
-4. Provide custom instructions
-5. AI generates script with GPT-4
-6. Review and edit the script
-7. Export to Premiere Pro XML
+2. Transcribe with Whisper AI
+3. Provide custom instructions
+4. AI generates script with GPT-4
+5. Review and edit the script
+6. Export to EDL format
 
 Built with Python, OpenAI APIs, and FFmpeg.
 """
@@ -663,15 +620,23 @@ Built with Python, OpenAI APIs, and FFmpeg.
     
     def log_message(self, message):
         """Add a message to the log display"""
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
-        logger.info(message)
+        try:
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state=tk.DISABLED)
+            logger.info(message)
+        except tk.TclError:
+            # Widget might be destroyed
+            pass
     
     def update_status(self, message):
         """Update the status bar"""
-        self.status_var.set(message)
+        try:
+            self.status_var.set(message)
+        except tk.TclError:
+            # Widget might be destroyed
+            pass
     
     def run(self):
         """Start the application"""

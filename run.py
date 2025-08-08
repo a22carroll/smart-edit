@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smart Edit - AI Video Editor
-Main Entry Point - Updated for Prompt-Driven Workflow
+Main Entry Point - Updated for EDL Export Workflow
 
 Launch the Smart Edit application with GUI or process videos via command line.
 """
@@ -173,17 +173,17 @@ def process_command_line_transcription_only(video_paths, output_path=None):
                 try:
                     # Export transcription summary
                     with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(f"Smart Edit Transcription Results\n")
-                        f.write(f"=" * 50 + "\n\n")
+                        f.write("Smart Edit Transcription Results\n")
+                        f.write("=" * 50 + "\n\n")
                         f.write(f"Project: {project_name}\n")
                         f.write(f"Videos processed: {len(video_paths)}\n\n")
                         
                         for i, video_path in enumerate(video_paths):
                             f.write(f"Video {i+1}: {os.path.basename(video_path)}\n")
                         
-                        f.write(f"\nTotal transcription segments: Available\n")
-                        f.write(f"\nNext steps:\n")
-                        f.write(f"1. Use GUI: python run.py --gui\n")
+                        f.write("\nTotal transcription segments: Available\n")
+                        f.write("\nNext steps:\n")
+                        f.write("1. Use GUI: python run.py --gui\n")
                         f.write(f"2. Or provide prompt: python run.py {' '.join(video_paths)} --prompt 'Your instructions'\n")
                     
                     print(f"📤 Transcription summary saved to: {output_path}")
@@ -260,8 +260,8 @@ def process_command_line_with_prompt(video_paths, user_prompt, target_duration=1
             
             # Determine export format from file extension
             output_ext = Path(output_path).suffix.lower()
-            if output_ext == '.xml':
-                export_format = "premiere_xml"
+            if output_ext == '.edl':
+                export_format = "edl"
             elif output_ext == '.json':
                 export_format = "json"
             else:
@@ -269,6 +269,7 @@ def process_command_line_with_prompt(video_paths, user_prompt, target_duration=1
             
             export_result = quick_export_script(
                 generated_script=script_result.data,
+                video_paths=video_paths,  # Fixed: Pass video_paths
                 output_path=output_path,
                 export_format=export_format,
                 progress_callback=progress_callback
@@ -316,8 +317,7 @@ def show_version():
     print("• High-accuracy transcription with Whisper AI")
     print("• User prompt-driven script generation with GPT-4o-mini")
     print("• Interactive script review and editing")
-    print("• Multi-camera and single video support")
-    print("• Premiere Pro XML export")
+    print("• EDL (Edit Decision List) export for universal compatibility")
 
 def show_examples():
     """Show usage examples"""
@@ -329,18 +329,18 @@ def show_examples():
     print("")
     print("2. Transcription only (then use GUI for script):")
     print("   python run.py video.mp4")
-    print("   python run.py cam1.mp4 cam2.mp4 cam3.mp4")
+    print("   python run.py video1.mp4 video2.mp4 video3.mp4")
     print("")
     print("3. Complete workflow with prompt:")
     print("   python run.py video.mp4 --prompt 'Create a 10-minute tutorial about Python'")
     print("   python run.py video.mp4 --prompt 'Make an engaging vlog' --duration 8")
     print("")
     print("4. Export to different formats:")
-    print("   python run.py video.mp4 --prompt 'Educational content' --output script.xml")
+    print("   python run.py video.mp4 --prompt 'Educational content' --output script.edl")
     print("   python run.py video.mp4 --prompt 'Quick highlights' --output results.json")
     print("")
-    print("5. Multi-camera with prompt:")
-    print("   python run.py cam1.mp4 cam2.mp4 --prompt 'Professional interview' --duration 15")
+    print("5. Multiple videos with prompt:")
+    print("   python run.py video1.mp4 video2.mp4 --prompt 'Compile best moments' --duration 15")
     print("")
     print("6. Check system setup:")
     print("   python run.py --check-deps")
@@ -348,14 +348,14 @@ def show_examples():
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description='Smart Edit - AI Video Editor v2.0 (Prompt-Driven Workflow)',
+        description='Smart Edit - AI Video Editor v2.0 (EDL Export Workflow)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-NEW WORKFLOW Examples:
+EDL EXPORT Examples:
   python run.py                                    # Launch GUI
   python run.py video.mp4                          # Transcribe only
   python run.py video.mp4 --prompt "Make tutorial" # Complete workflow
-  python run.py cam1.mp4 cam2.mp4 --prompt "Edit interview" --duration 20
+  python run.py video1.mp4 video2.mp4 --prompt "Edit compilation" --duration 20
         """
     )
     
@@ -385,15 +385,7 @@ NEW WORKFLOW Examples:
     
     parser.add_argument(
         '-o', '--output',
-        help='Output file path (.xml for Premiere, .json for data, .txt for text)'
-    )
-    
-    # Legacy compression argument (kept for compatibility but not used in new workflow)
-    parser.add_argument(
-        '-c', '--compression',
-        type=float,
-        default=0.7,
-        help='Legacy option (not used in prompt-driven workflow)'
+        help='Output file path (.edl for EDL format, .json for data, .txt for text)'
     )
     
     parser.add_argument(
@@ -467,7 +459,7 @@ NEW WORKFLOW Examples:
         if not output_path and len(video_paths) == 1:
             video_stem = Path(video_paths[0]).stem
             if args.prompt:
-                output_path = f"{video_stem}_edited.xml"  # XML for complete workflow
+                output_path = f"{video_stem}_edited.edl"  # EDL for complete workflow
             else:
                 output_path = f"{video_stem}_transcription.txt"  # Text for transcription only
         

@@ -1,8 +1,9 @@
 """
-Smart Edit Script Editor Window - Prompt-Driven Version
+Smart Edit Script Editor Window - Cleaned Version
 
 Interactive editor for reviewing and modifying AI-generated scripts.
 Takes user prompt, generates script, displays full text for editing.
+Simplified for single video workflow with EDL export.
 """
 
 import os
@@ -64,10 +65,6 @@ class PromptScriptEditorWindow:
         self.transcriptions = transcriptions
         self.project_name = project_name
         
-        # Determine if single or multicam
-        self.is_multicam = len(transcriptions) > 1
-        self.video_count = len(transcriptions)
-        
         # Calculate total duration
         self.total_duration = sum(t.metadata.get('total_duration', 0) for t in transcriptions)
         
@@ -81,7 +78,7 @@ class PromptScriptEditorWindow:
         
         # Create window
         self.window = tk.Toplevel(parent)
-        self.window.title(f"Smart Edit - Script Generator & Editor")
+        self.window.title("Smart Edit - Script Generator & Editor")
         self.window.geometry("1000x700")
         self.window.transient(parent)
         self.window.grab_set()
@@ -233,19 +230,17 @@ class PromptScriptEditorWindow:
         
         # Segments treeview
         self.segments_tree = ttk.Treeview(segments_container, 
-                                        columns=("time", "video", "content"), 
+                                        columns=("time", "content"), 
                                         show="tree headings")
         
-        # Configure columns
+        # Configure columns - removed "video" column since no multicam
         self.segments_tree.heading("#0", text="✓")
         self.segments_tree.heading("time", text="Time")
-        self.segments_tree.heading("video", text="Video")
         self.segments_tree.heading("content", text="Content")
         
         self.segments_tree.column("#0", width=30, minwidth=30)
         self.segments_tree.column("time", width=80, minwidth=60)
-        self.segments_tree.column("video", width=50, minwidth=40)
-        self.segments_tree.column("content", width=200, minwidth=150)
+        self.segments_tree.column("content", width=250, minwidth=200)
         
         # Scrollbars for segments
         segments_scroll = ttk.Scrollbar(segments_container, orient=tk.VERTICAL, command=self.segments_tree.yview)
@@ -281,14 +276,14 @@ class PromptScriptEditorWindow:
         self.timeline_text = scrolledtext.ScrolledText(timeline_frame, font=("Consolas", 9), state=tk.DISABLED)
         self.timeline_text.pack(fill=tk.BOTH, expand=True)
         
-        # Export options
+        # Export options - Updated for EDL
         export_frame = ttk.LabelFrame(self.timeline_frame, text="Export Options", padding="10")
         export_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        self.export_format_var = tk.StringVar(value="premiere_xml")
+        self.export_format_var = tk.StringVar(value="edl")
         
-        ttk.Radiobutton(export_frame, text="Premiere Pro XML", 
-                       variable=self.export_format_var, value="premiere_xml").pack(side=tk.LEFT)
+        ttk.Radiobutton(export_frame, text="EDL (Edit Decision List)", 
+                       variable=self.export_format_var, value="edl").pack(side=tk.LEFT)
         ttk.Radiobutton(export_frame, text="Text Script", 
                        variable=self.export_format_var, value="text").pack(side=tk.LEFT, padx=(20, 0))
         ttk.Radiobutton(export_frame, text="JSON Data", 
@@ -296,16 +291,11 @@ class PromptScriptEditorWindow:
     
     def _update_project_info(self):
         """Update project information display"""
-        if self.is_multicam:
-            project_type = f"Multi-Camera ({self.video_count} videos)"
-        else:
-            project_type = "Single Video"
-        
         duration_mins = int(self.total_duration // 60)
         duration_secs = int(self.total_duration % 60)
         
         info_text = (f"Project: {self.project_name}\n"
-                    f"Type: {project_type}\n"
+                    f"Videos: {len(self.transcriptions)}\n"
                     f"Total Duration: {duration_mins}:{duration_secs:02d}\n"
                     f"Transcription: Complete")
         
@@ -488,27 +478,20 @@ class PromptScriptEditorWindow:
             # Add placeholder item
             self.segments_tree.insert("", tk.END, 
                                     text="",
-                                    values=("0.0s", "V1", "No segments available"),
+                                    values=("0.0s", "No segments available"),
                                     tags=("placeholder",))
             return
         
-        # Add segments
+        # Add segments - removed video column handling
         for i, segment in enumerate(segments):
             try:
                 # Format time with error handling
                 start_time = getattr(segment, 'start_time', 0.0)
                 time_str = f"{start_time:.1f}s"
                 
-                # Video indicator
-                video_index = getattr(segment, 'video_index', 0)
-                if self.is_multicam:
-                    video_str = f"V{video_index + 1}"
-                else:
-                    video_str = "V1"
-                
                 # Content preview with error handling
                 content = getattr(segment, 'content', 'No content')
-                content_preview = content[:50] + "..." if len(content) > 50 else content
+                content_preview = content[:60] + "..." if len(content) > 60 else content
                 
                 # Insert with checkbox
                 keep = getattr(segment, 'keep', True)
@@ -516,14 +499,14 @@ class PromptScriptEditorWindow:
                 
                 self.segments_tree.insert("", tk.END, 
                                         text=checkbox_text,
-                                        values=(time_str, video_str, content_preview),
+                                        values=(time_str, content_preview),
                                         tags=(f"segment_{i}",))
                 
             except Exception as e:
                 # Add error item
                 self.segments_tree.insert("", tk.END, 
                                         text="",
-                                        values=("ERR", "V?", f"Error loading segment {i}: {e}"),
+                                        values=("ERR", f"Error loading segment {i}: {e}"),
                                         tags=(f"error_{i}",))
     
     def _select_all_segments(self):
@@ -544,16 +527,16 @@ class PromptScriptEditorWindow:
             return
         
         timeline_lines = []
-        timeline_lines.append(f"=== FINAL TIMELINE PREVIEW ===\n")
+        timeline_lines.append("=== FINAL TIMELINE PREVIEW ===\n")
         timeline_lines.append(f"Project: {self.generated_script.title}")
-        timeline_lines.append(f"Type: {'Multi-Camera' if self.is_multicam else 'Single Video'}")
         timeline_lines.append("")
         
         # Get selected segments
         selected_segments = []
         for i, item in enumerate(self.segments_tree.get_children()):
             if self.segments_tree.item(item, "text") == "✓":
-                selected_segments.append(self.generated_script.segments[i])
+                if i < len(self.generated_script.segments):
+                    selected_segments.append(self.generated_script.segments[i])
         
         if not selected_segments:
             timeline_lines.append("No segments selected for final timeline.")
@@ -563,13 +546,10 @@ class PromptScriptEditorWindow:
             for i, segment in enumerate(selected_segments):
                 duration = segment.end_time - segment.start_time
                 
-                # Video indicator
-                video_indicator = f"[Video {segment.video_index + 1}]" if self.is_multicam else ""
-                
-                # Timeline entry
+                # Timeline entry - removed video indicator since no multicam
                 timeline_lines.append(
-                    f"{current_time:6.1f}s - {current_time + duration:6.1f}s {video_indicator}: "
-                    f"{segment.content[:60]}{'...' if len(segment.content) > 60 else ''}"
+                    f"{current_time:6.1f}s - {current_time + duration:6.1f}s: "
+                    f"{segment.content[:70]}{'...' if len(segment.content) > 70 else ''}"
                 )
                 
                 current_time += duration
