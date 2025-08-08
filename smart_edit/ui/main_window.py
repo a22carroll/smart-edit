@@ -1,8 +1,8 @@
 """
-Smart Edit Main Window - Compact Layout Version
+Smart Edit Main Window - Simplified and Bug-free Version
 
 Main application window for the Smart Edit video editing system.
-Exports to EDL format with improved error handling and compact UI layout.
+Exports to EDL format with streamlined code and maintained functionality.
 """
 
 import os
@@ -36,20 +36,13 @@ logger = logging.getLogger(__name__)
 class SmartEditMainWindow:
     """Main application window for Smart Edit"""
     
-    # UI Constants - Compacted
-    LISTBOX_HEIGHT = 4
-    PROJECT_NAME_WIDTH = 20
-    RESULTS_TEXT_HEIGHT = 8
-    RESULTS_TEXT_WIDTH = 50
-    LOG_TEXT_HEIGHT = 6
-    
     # Supported video formats
     VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm']
     
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Smart Edit - AI Video Editor")
-        self.root.geometry("1000x700")  # Reduced from 1200x800
+        self.root.geometry("1000x700")
         
         # Application state
         self.video_files = []
@@ -61,12 +54,11 @@ class SmartEditMainWindow:
         self.clip_name_entries = []  # Store UI entry widgets
         
         self._setup_ui()
-        self._setup_menu()
         self.update_status("Ready - Load video files to begin")
     
     def _setup_ui(self):
         """Set up the main user interface"""
-        # Main container - reduced padding
+        # Main container
         main_frame = ttk.Frame(self.root, padding="5")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -76,7 +68,7 @@ class SmartEditMainWindow:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
         
-        # Title - smaller font and less padding
+        # Title
         ttk.Label(main_frame, text="Smart Edit", font=("Arial", 18, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(0, 10))
         
@@ -96,40 +88,41 @@ class SmartEditMainWindow:
         left_frame = ttk.LabelFrame(parent, text="Video Files & Controls", padding="5")
         left_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
-        # Project name - more compact
+        # Project name
         project_frame = ttk.Frame(left_frame)
         project_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         ttk.Label(project_frame, text="Project:").pack(side=tk.LEFT)
         self.project_name_var = tk.StringVar(value=self.project_name)
-        ttk.Entry(project_frame, textvariable=self.project_name_var, width=self.PROJECT_NAME_WIDTH).pack(
+        ttk.Entry(project_frame, textvariable=self.project_name_var, width=20).pack(
             side=tk.LEFT, padx=(3, 0), fill=tk.X, expand=True)
         self.project_name_var.trace('w', self._on_project_name_change)
         
-        # File list - more compact
+        # File list
         ttk.Label(left_frame, text="Videos:").grid(row=1, column=0, sticky=tk.W, pady=(0, 2))
         
         listbox_frame = ttk.Frame(left_frame)
         listbox_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         listbox_frame.columnconfigure(0, weight=1)
         
-        self.file_listbox = tk.Listbox(listbox_frame, height=self.LISTBOX_HEIGHT)
+        self.file_listbox = tk.Listbox(listbox_frame, height=4)
         self.file_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.file_listbox.configure(yscrollcommand=scrollbar.set)
         
-        # File buttons - more compact
+        # File buttons
         button_frame = ttk.Frame(left_frame)
         button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         ttk.Button(button_frame, text="Add", command=self.add_videos).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(button_frame, text="Remove", command=self.remove_video).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(button_frame, text="Clear", command=self.clear_videos).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="New Project", command=self.new_project).pack(side=tk.RIGHT)
         
-        # Custom clip names section - more compact
+        # Custom clip names section
         self._setup_clip_names_section(left_frame)
         
-        # Processing controls - more compact spacing
+        # Processing controls
         ttk.Separator(left_frame, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
         ttk.Label(left_frame, text="Processing:", font=("Arial", 10, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(0, 5))
         
@@ -143,7 +136,7 @@ class SmartEditMainWindow:
         self.progress = ttk.Progressbar(left_frame, mode='indeterminate')
         self.progress.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        # Export controls - more compact
+        # Export controls
         ttk.Separator(left_frame, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
         ttk.Label(left_frame, text="Export:", font=("Arial", 10, "bold")).grid(row=12, column=0, sticky=tk.W, pady=(0, 5))
         
@@ -152,35 +145,21 @@ class SmartEditMainWindow:
         self.export_button.grid(row=13, column=0, columnspan=2, sticky=(tk.W, tk.E))
     
     def _setup_clip_names_section(self, parent):
-        """Setup the custom clip names editing section"""
-        # Label for clip names - more compact
+        """Setup the custom clip names editing section - simplified approach"""
+        # Label for clip names
         ttk.Label(parent, text="Clip Names:").grid(row=4, column=0, sticky=tk.W, pady=(5, 2))
         
-        # Scrollable frame for clip name entries - reduced height
-        self.clip_names_canvas = tk.Canvas(parent, height=80)
-        self.clip_names_canvas.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        # Frame for clip name entries with scrollbar
+        clip_frame = ttk.Frame(parent)
+        clip_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        clip_frame.columnconfigure(0, weight=1)
         
-        self.clip_names_scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.clip_names_canvas.yview)
-        self.clip_names_scrollbar.grid(row=5, column=1, sticky=(tk.N, tk.S, tk.E), pady=(0, 5))
+        # Scrollable text widget for clip names (simpler than canvas approach)
+        self.clip_names_frame = ttk.Frame(clip_frame)
+        self.clip_names_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
-        self.clip_names_canvas.configure(yscrollcommand=self.clip_names_scrollbar.set)
-        
-        # Frame inside canvas for clip name entries
-        self.clip_names_frame = ttk.Frame(self.clip_names_canvas)
-        self.clip_names_canvas_window = self.clip_names_canvas.create_window((0, 0), window=self.clip_names_frame, anchor="nw")
-        
-        # Bind canvas resize
-        self.clip_names_frame.bind("<Configure>", self._on_clip_names_frame_configure)
-        self.clip_names_canvas.bind("<Configure>", self._on_clip_names_canvas_configure)
-    
-    def _on_clip_names_frame_configure(self, event):
-        """Update canvas scroll region when frame size changes"""
-        self.clip_names_canvas.configure(scrollregion=self.clip_names_canvas.bbox("all"))
-    
-    def _on_clip_names_canvas_configure(self, event):
-        """Update frame width when canvas size changes"""
-        canvas_width = event.width
-        self.clip_names_canvas.itemconfig(self.clip_names_canvas_window, width=canvas_width)
+        # Initially show placeholder
+        self._update_clip_names_ui()
     
     def _update_clip_names_ui(self):
         """Update the clip names editing UI based on current video files"""
@@ -190,44 +169,39 @@ class SmartEditMainWindow:
         self.clip_name_entries.clear()
         
         if not self.video_files:
-            # Show placeholder text when no videos - smaller text
+            # Show placeholder text when no videos
             ttk.Label(self.clip_names_frame, text="Add videos to edit clip names", 
                      foreground="gray", font=("Arial", 8)).grid(row=0, column=0, pady=5)
             return
         
-        # Create entry for each video file - more compact layout
+        # Create entry for each video file - simplified layout
         for i, video_path in enumerate(self.video_files):
             filename = os.path.basename(video_path)
             
-            # Frame for this clip name entry - reduced padding
+            # Frame for this clip name entry
             entry_frame = ttk.Frame(self.clip_names_frame)
             entry_frame.grid(row=i, column=0, sticky=(tk.W, tk.E), pady=1, padx=2)
-            entry_frame.columnconfigure(1, weight=1)
+            entry_frame.columnconfigure(2, weight=1)
             
-            # Label showing original filename (truncated if too long) - smaller width
+            # Simplified display - just number and truncated filename
             display_filename = filename if len(filename) <= 15 else filename[:12] + "..."
             ttk.Label(entry_frame, text=f"{i+1}.", width=2).grid(row=0, column=0, padx=(0, 2))
-            ttk.Label(entry_frame, text=display_filename, width=15).grid(row=0, column=1, sticky=tk.W, padx=(0, 2))
-            ttk.Label(entry_frame, text="→").grid(row=0, column=2, padx=2)
+            ttk.Label(entry_frame, text=display_filename, width=15).grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
             
-            # Entry for custom name - reduced width
+            # Entry for custom name
             custom_name_var = tk.StringVar()
             # Pre-fill with existing custom name if available
             if i in self.custom_clip_names:
                 custom_name_var.set(self.custom_clip_names[i])
             
             entry = ttk.Entry(entry_frame, textvariable=custom_name_var, width=15)
-            entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 2))
+            entry.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(0, 2))
             
             # Store the variable and index for later retrieval
             self.clip_name_entries.append((i, custom_name_var))
             
             # Bind to update custom names when changed
             custom_name_var.trace('w', lambda *args, idx=i, var=custom_name_var: self._on_clip_name_change(idx, var))
-        
-        # Update scroll region
-        self.clip_names_frame.update_idletasks()
-        self.clip_names_canvas.configure(scrollregion=self.clip_names_canvas.bbox("all"))
     
     def _on_clip_name_change(self, video_index, name_var):
         """Handle clip name changes"""
@@ -247,36 +221,15 @@ class SmartEditMainWindow:
         right_frame.rowconfigure(2, weight=1)
         
         # Results display
-        self.results_text = ScrolledText(right_frame, height=self.RESULTS_TEXT_HEIGHT, 
-                                        width=self.RESULTS_TEXT_WIDTH, state=tk.DISABLED)
+        self.results_text = ScrolledText(right_frame, height=8, width=50, state=tk.DISABLED)
         self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
         
-        # Log label - smaller padding
+        # Log label
         ttk.Label(right_frame, text="Log:").grid(row=1, column=0, sticky=tk.W, pady=(5, 2))
         
         # Log display
-        self.log_text = ScrolledText(right_frame, height=self.LOG_TEXT_HEIGHT, 
-                                    width=self.RESULTS_TEXT_WIDTH, state=tk.DISABLED)
+        self.log_text = ScrolledText(right_frame, height=6, width=50, state=tk.DISABLED)
         self.log_text.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    
-    def _setup_menu(self):
-        """Set up the application menu"""
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-        
-        # File menu
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New Project", command=self.new_project)
-        file_menu.add_separator()
-        file_menu.add_command(label="Add Videos...", command=self.add_videos)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
-        
-        # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="About", command=self.show_about)
     
     def _on_project_name_change(self, *args):
         """Handle project name changes"""
@@ -286,30 +239,12 @@ class SmartEditMainWindow:
         """Check if file is a supported video format"""
         return Path(file_path).suffix.lower() in self.VIDEO_EXTENSIONS
     
-    def _format_file_size(self, file_path):
-        """Get formatted file size string"""
-        try:
-            size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            return f"({size_mb:.1f} MB)"
-        except OSError:
-            return "(unknown size)"
-    
-    def _handle_error(self, operation, error, show_dialog=True):
+    def _handle_error(self, operation, error):
         """Centralized error handling"""
         error_msg = f"{operation} failed: {str(error)}"
         self.log_message(f"❌ {error_msg}")
         logger.error(f"{operation} error: {error}")
-        
-        if show_dialog:
-            messagebox.showerror(f"{operation} Error", error_msg)
-    
-    def _update_ui_safe(self, update_func):
-        """Safely update UI from thread"""
-        try:
-            self.root.after(0, update_func)
-        except tk.TclError:
-            # Window might be closed
-            pass
+        messagebox.showerror(f"{operation} Error", error_msg)
     
     def new_project(self):
         """Start a new project"""
@@ -320,7 +255,7 @@ class SmartEditMainWindow:
         self.clear_videos()
         self.project_name = "Untitled Project"
         self.project_name_var.set(self.project_name)
-        self.custom_clip_names.clear()  # Clear custom clip names
+        self.custom_clip_names.clear()
         self.log_message("🆕 Started new project")
     
     def add_videos(self):
@@ -342,10 +277,7 @@ class SmartEditMainWindow:
             
             self.video_files.append(file_path)
             filename = os.path.basename(file_path)
-            size_str = self._format_file_size(file_path)
-            display_name = f"{filename} {size_str}"
-            
-            self.file_listbox.insert(tk.END, display_name)
+            self.file_listbox.insert(tk.END, filename)  # Simplified - just filename
             added_count += 1
         
         # Update clip names UI
@@ -374,6 +306,7 @@ class SmartEditMainWindow:
         """Remove selected video from the list"""
         selection = self.file_listbox.curselection()
         if not selection:
+            messagebox.showinfo("No Selection", "Please select a video to remove.")
             return
             
         index = selection[0]
@@ -405,7 +338,7 @@ class SmartEditMainWindow:
         """Clear all videos from the list"""
         self.video_files.clear()
         self.file_listbox.delete(0, tk.END)
-        self.custom_clip_names.clear()  # Clear custom clip names
+        self.custom_clip_names.clear()
         self._update_clip_names_ui()
         self._reset_processing_state()
         self.update_status("Ready - Load video files to begin")
@@ -455,33 +388,26 @@ class SmartEditMainWindow:
             for i, video_path in enumerate(self.video_files):
                 video_name = os.path.basename(video_path)
                 
-                # Update progress - fixed lambda closure bug
-                def update_progress(name=video_name, idx=i+1, total=len(self.video_files)):
-                    self.log_message(f"🎤 Transcribing {idx}/{total}: {name}")
-                
-                self._update_ui_safe(update_progress)
+                # Update progress
+                self.root.after(0, lambda name=video_name, idx=i+1, total=len(self.video_files): 
+                              self.log_message(f"🎤 Transcribing {idx}/{total}: {name}"))
                 
                 # Transcribe video
                 result = transcribe_video(video_path)
                 self.transcription_results.append(result)
                 
-                # Update completion - fixed lambda closure bug
+                # Update completion
                 duration_mins = result.metadata.get('total_duration', 0) / 60
                 segment_count = len(result.segments)
                 
-                def update_complete(name=video_name, duration=duration_mins, segments=segment_count):
-                    self.log_message(f"✅ Completed: {name} ({duration:.1f}min, {segments} segments)")
-                
-                self._update_ui_safe(update_complete)
+                self.root.after(0, lambda name=video_name, duration=duration_mins, segments=segment_count:
+                              self.log_message(f"✅ Completed: {name} ({duration:.1f}min, {segments} segments)"))
             
-            self._update_ui_safe(self._transcription_complete)
+            self.root.after(0, self._transcription_complete)
             
         except Exception as e:
-            def handle_error():
-                self._handle_error("Transcription", e)
-                self._transcription_failed()
-            
-            self._update_ui_safe(handle_error)
+            self.root.after(0, lambda: self._handle_error("Transcription", e))
+            self.root.after(0, self._transcription_failed)
     
     def _transcription_complete(self):
         """Handle successful transcription completion"""
@@ -490,7 +416,7 @@ class SmartEditMainWindow:
         self.script_button.config(state=tk.NORMAL)
         self._update_transcription_results()
         self.update_status("Transcription complete - Ready to create script")
-        self.log_message("🎉 Transcription complete! Click 'Create Script' to continue.")
+        self.log_message("🎉 Transcription complete! Click 'Script' to continue.")
     
     def _transcription_failed(self):
         """Handle transcription failure"""
@@ -499,7 +425,7 @@ class SmartEditMainWindow:
         self.update_status("Transcription failed - Check logs for details")
     
     def _update_transcription_results(self):
-        """Update the results display with transcription summary"""
+        """Update the results display with transcription summary - simplified"""
         if not self.transcription_results:
             return
         
@@ -508,37 +434,31 @@ class SmartEditMainWindow:
             total_duration = sum(t.metadata.get('total_duration', 0) for t in self.transcription_results)
             total_segments = sum(len(t.segments) for t in self.transcription_results)
             
-            # Build results text
+            # Build simplified results text
             results_lines = [
-                "=== TRANSCRIPTION RESULTS ===\n",
-                "📊 PROJECT OVERVIEW:",
-                f"  • Project: {self.project_name}",
-                f"  • Videos: {len(self.transcription_results)}",
-                f"  • Total Duration: {total_duration/60:.1f} minutes",
-                f"  • Total Segments: {total_segments}",
+                "=== TRANSCRIPTION COMPLETE ===\n",
+                f"Project: {self.project_name}",
+                f"Videos: {len(self.transcription_results)}",
+                f"Duration: {total_duration/60:.1f} minutes", 
+                f"Segments: {total_segments}",
                 "",
-                "📹 VIDEO DETAILS:"
+                "📹 Videos:"
             ]
             
             # Add video details
             for i, result in enumerate(self.transcription_results):
-                if i >= len(self.video_files):  # Safety check
+                if i >= len(self.video_files):
                     continue
                     
                 video_name = os.path.basename(self.video_files[i])
                 duration = result.metadata.get('total_duration', 0)
                 segments = len(result.segments)
-                language = result.metadata.get('language_detected', 'unknown')
                 
-                results_lines.extend([
-                    f"  Video {i+1}: {video_name}",
-                    f"    • Duration: {duration/60:.1f} min, Segments: {segments}, Language: {language}"
-                ])
+                results_lines.append(f"  {i+1}. {video_name} ({duration/60:.1f}min, {segments} segments)")
             
             results_lines.extend([
                 "",
-                "🎬 NEXT STEP:",
-                "  Click 'Create Script' to generate your video script!"
+                "✅ Ready for script generation!"
             ])
             
             # Update display
@@ -548,7 +468,7 @@ class SmartEditMainWindow:
             self.results_text.config(state=tk.DISABLED)
             
         except Exception as e:
-            self.log_message(f"⚠️ Error updating transcription results: {e}")
+            self.log_message(f"⚠️ Error updating results: {e}")
     
     def open_script_generator(self):
         """Open the script generator/editor window"""
@@ -578,7 +498,7 @@ class SmartEditMainWindow:
             self._handle_error("Script generator", e)
     
     def _update_script_results(self):
-        """Update results display with script information"""
+        """Update results display with script information - simplified"""
         if not self.generated_script:
             return
         
@@ -587,41 +507,39 @@ class SmartEditMainWindow:
             selected_segments = [s for s in segments if getattr(s, 'keep', True)]
             
             results_lines = [
-                "=== SCRIPT GENERATION RESULTS ===\n",
-                "📝 GENERATED SCRIPT:",
-                f"  • Title: {getattr(self.generated_script, 'title', 'Untitled')}",
-                f"  • Estimated Duration: {getattr(self.generated_script, 'estimated_duration_seconds', 0)/60:.1f} minutes",
-                f"  • Selected Segments: {len(selected_segments)} of {len(segments)}",
+                "=== SCRIPT GENERATED ===\n",
+                f"Title: {getattr(self.generated_script, 'title', 'Untitled')}",
+                f"Duration: {getattr(self.generated_script, 'estimated_duration_seconds', 0)/60:.1f} minutes",
+                f"Segments: {len(selected_segments)} selected",
                 ""
             ]
             
             # User prompt
             user_prompt = getattr(self.generated_script, 'user_prompt', '')
             if user_prompt:
-                prompt_preview = user_prompt[:100] + "..." if len(user_prompt) > 100 else user_prompt
+                prompt_preview = user_prompt if len(user_prompt) <= 100 else user_prompt[:97] + "..."
                 results_lines.extend([
-                    "💭 USER INSTRUCTIONS:",
-                    f'  "{prompt_preview}"',
+                    f"Instructions: {prompt_preview}",
                     ""
                 ])
             
             # Sample segments
-            results_lines.append("📋 SELECTED SEGMENTS:")
+            results_lines.append("📋 Selected segments:")
             for i, segment in enumerate(selected_segments[:5]):
                 start_time = getattr(segment, 'start_time', 0)
                 content = getattr(segment, 'content', 'No content')
                 video_idx = getattr(segment, 'video_index', 0)
                 
                 video_indicator = f"[V{video_idx + 1}]" if len(self.transcription_results) > 1 else ""
-                results_lines.append(f"  {start_time:.1f}s {video_indicator}: {content[:60]}...")
+                content_preview = content if len(content) <= 50 else content[:47] + "..."
+                results_lines.append(f"  {start_time:.1f}s {video_indicator}: {content_preview}")
             
             if len(selected_segments) > 5:
-                results_lines.append(f"  ... and {len(selected_segments) - 5} more segments")
+                results_lines.append(f"  ... and {len(selected_segments) - 5} more")
             
             results_lines.extend([
                 "",
-                "📤 READY FOR EXPORT:",
-                "  Click 'Export EDL' to create edit decision list"
+                "✅ Ready to export EDL!"
             ])
             
             # Update display
@@ -631,7 +549,7 @@ class SmartEditMainWindow:
             self.results_text.config(state=tk.DISABLED)
             
         except Exception as e:
-            self.log_message(f"⚠️ Error updating script results: {e}")
+            self.log_message(f"⚠️ Error updating results: {e}")
     
     def export_edl(self):
         """Export the generated script to EDL format"""
@@ -648,7 +566,7 @@ class SmartEditMainWindow:
             default_name = f"{self.project_name}.txt"
         
         output_path = filedialog.asksaveasfilename(
-            title="Save EDL File",
+            title="Save Export File",
             initialfile=default_name,
             filetypes=filetypes
         )
@@ -664,7 +582,7 @@ class SmartEditMainWindow:
                     video_paths=self.video_files,
                     output_path=output_path,
                     sequence_name=os.path.splitext(os.path.basename(output_path))[0],
-                    custom_clip_names=self.custom_clip_names  # Pass custom clip names
+                    custom_clip_names=self.custom_clip_names
                 )
                 
                 if success:
@@ -675,33 +593,32 @@ class SmartEditMainWindow:
                     messagebox.showerror("Export Failed", "EDL export failed. Check logs for details.")
             else:
                 # Fallback to text export
-                self.log_message("📤 Exporting text representation...")
+                self.log_message("📤 Exporting text...")
                 self._export_text_representation(output_path)
-                self.log_message(f"✅ Text export completed: {os.path.basename(output_path)}")
+                self.log_message(f"✅ Text exported: {os.path.basename(output_path)}")
                 messagebox.showinfo("Export Complete", f"Text file exported successfully!\n{output_path}")
                 
         except Exception as e:
             self._handle_error("Export", e)
     
     def _export_text_representation(self, output_path):
-        """Export script as text representation"""
+        """Export script as text representation - simplified"""
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(f"Smart Edit Project Export\n{'=' * 50}\n\n")
-            f.write(f"Project: {self.project_name}\n")
-            f.write(f"Videos: {len(self.video_files)}\n\n")
+            f.write(f"Smart Edit Project: {self.project_name}\n")
+            f.write("=" * 50 + "\n\n")
             
-            # List video files
-            f.write("Video Files:\n")
+            # Video files
+            f.write(f"Videos ({len(self.video_files)}):\n")
             for i, video_path in enumerate(self.video_files):
                 f.write(f"  {i+1}. {os.path.basename(video_path)}\n")
             
             # User prompt
             user_prompt = getattr(self.generated_script, 'user_prompt', '')
             if user_prompt:
-                f.write(f"\nUser Instructions:\n{user_prompt}\n\n")
+                f.write(f"\nInstructions:\n{user_prompt}\n\n")
             
             # Timeline segments
-            f.write(f"Timeline Segments:\n{'-' * 20}\n")
+            f.write("Timeline:\n" + "-" * 20 + "\n")
             segments = getattr(self.generated_script, 'segments', [])
             selected_segments = [s for s in segments if getattr(s, 'keep', True)]
             
@@ -712,25 +629,6 @@ class SmartEditMainWindow:
                 video_idx = getattr(segment, 'video_index', 0)
                 
                 f.write(f"{i+1}. {start_time:.2f}s-{end_time:.2f}s [Video {video_idx + 1}]: {content}\n")
-    
-    def show_about(self):
-        """Show about dialog"""
-        about_text = """Smart Edit - AI Video Editor v2.0
-
-An intelligent video editing system that uses AI to automatically 
-generate edit decisions from raw footage based on user instructions.
-
-WORKFLOW:
-1. Load video files
-2. Transcribe with Whisper AI
-3. Provide custom instructions
-4. AI generates script with GPT-4
-5. Review and edit the script
-6. Export to EDL format
-
-Built with Python, OpenAI APIs, and FFmpeg.
-"""
-        messagebox.showinfo("About Smart Edit", about_text)
     
     def log_message(self, message):
         """Add a message to the log display"""
@@ -758,8 +656,12 @@ Built with Python, OpenAI APIs, and FFmpeg.
 
 def main():
     """Main entry point"""
-    app = SmartEditMainWindow()
-    app.run()
+    try:
+        app = SmartEditMainWindow()
+        app.run()
+    except Exception as e:
+        logging.error(f"Application failed to start: {e}")
+        messagebox.showerror("Startup Error", f"Failed to start Smart Edit:\n{str(e)}")
 
 if __name__ == "__main__":
     main()
