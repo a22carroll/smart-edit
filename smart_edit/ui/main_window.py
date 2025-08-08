@@ -1,8 +1,8 @@
 """
-Smart Edit Main Window - Cleaned and Bug-free Version
+Smart Edit Main Window - Compact Layout Version
 
 Main application window for the Smart Edit video editing system.
-Exports to EDL format with improved error handling and removed unnecessary code.
+Exports to EDL format with improved error handling and compact UI layout.
 """
 
 import os
@@ -36,12 +36,12 @@ logger = logging.getLogger(__name__)
 class SmartEditMainWindow:
     """Main application window for Smart Edit"""
     
-    # UI Constants
-    LISTBOX_HEIGHT = 6
-    PROJECT_NAME_WIDTH = 25
-    RESULTS_TEXT_HEIGHT = 12
-    RESULTS_TEXT_WIDTH = 60
-    LOG_TEXT_HEIGHT = 8
+    # UI Constants - Compacted
+    LISTBOX_HEIGHT = 4
+    PROJECT_NAME_WIDTH = 20
+    RESULTS_TEXT_HEIGHT = 8
+    RESULTS_TEXT_WIDTH = 50
+    LOG_TEXT_HEIGHT = 6
     
     # Supported video formats
     VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm']
@@ -49,7 +49,7 @@ class SmartEditMainWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Smart Edit - AI Video Editor")
-        self.root.geometry("1200x800")
+        self.root.geometry("1000x700")  # Reduced from 1200x800
         
         # Application state
         self.video_files = []
@@ -66,8 +66,8 @@ class SmartEditMainWindow:
     
     def _setup_ui(self):
         """Set up the main user interface"""
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Main container - reduced padding
+        main_frame = ttk.Frame(self.root, padding="5")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure grid weights
@@ -76,9 +76,9 @@ class SmartEditMainWindow:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
         
-        # Title
-        ttk.Label(main_frame, text="Smart Edit", font=("Arial", 24, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=(0, 20))
+        # Title - smaller font and less padding
+        ttk.Label(main_frame, text="Smart Edit", font=("Arial", 18, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 10))
         
         # Left panel - Controls
         self._setup_left_panel(main_frame)
@@ -88,28 +88,28 @@ class SmartEditMainWindow:
         
         # Status bar
         self.status_var = tk.StringVar()
-        ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, padding="5").grid(
-            row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, padding="3").grid(
+            row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
     
     def _setup_left_panel(self, parent):
         """Setup left control panel"""
-        left_frame = ttk.LabelFrame(parent, text="Video Files & Controls", padding="10")
-        left_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        left_frame = ttk.LabelFrame(parent, text="Video Files & Controls", padding="5")
+        left_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
-        # Project name
+        # Project name - more compact
         project_frame = ttk.Frame(left_frame)
-        project_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        ttk.Label(project_frame, text="Project Name:").pack(side=tk.LEFT)
+        project_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        ttk.Label(project_frame, text="Project:").pack(side=tk.LEFT)
         self.project_name_var = tk.StringVar(value=self.project_name)
         ttk.Entry(project_frame, textvariable=self.project_name_var, width=self.PROJECT_NAME_WIDTH).pack(
-            side=tk.LEFT, padx=(5, 0), fill=tk.X, expand=True)
+            side=tk.LEFT, padx=(3, 0), fill=tk.X, expand=True)
         self.project_name_var.trace('w', self._on_project_name_change)
         
-        # File list
-        ttk.Label(left_frame, text="Selected Videos:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
+        # File list - more compact
+        ttk.Label(left_frame, text="Videos:").grid(row=1, column=0, sticky=tk.W, pady=(0, 2))
         
         listbox_frame = ttk.Frame(left_frame)
-        listbox_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        listbox_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         listbox_frame.columnconfigure(0, weight=1)
         
         self.file_listbox = tk.Listbox(listbox_frame, height=self.LISTBOX_HEIGHT)
@@ -119,49 +119,49 @@ class SmartEditMainWindow:
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.file_listbox.configure(yscrollcommand=scrollbar.set)
         
-        # File buttons
+        # File buttons - more compact
         button_frame = ttk.Frame(left_frame)
-        button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        ttk.Button(button_frame, text="Add Videos", command=self.add_videos).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Remove", command=self.remove_video).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Clear All", command=self.clear_videos).pack(side=tk.LEFT)
+        button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        ttk.Button(button_frame, text="Add", command=self.add_videos).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(button_frame, text="Remove", command=self.remove_video).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(button_frame, text="Clear", command=self.clear_videos).pack(side=tk.LEFT)
         
-        # Custom clip names section
+        # Custom clip names section - more compact
         self._setup_clip_names_section(left_frame)
         
-        # Processing controls
-        ttk.Separator(left_frame, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
-        ttk.Label(left_frame, text="Processing:", font=("Arial", 12, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(0, 10))
+        # Processing controls - more compact spacing
+        ttk.Separator(left_frame, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
+        ttk.Label(left_frame, text="Processing:", font=("Arial", 10, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(0, 5))
         
-        self.transcribe_button = ttk.Button(left_frame, text="🎤 Transcribe Videos", command=self.start_transcription)
-        self.transcribe_button.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        self.transcribe_button = ttk.Button(left_frame, text="🎤 Transcribe", command=self.start_transcription)
+        self.transcribe_button.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 3))
         
-        self.script_button = ttk.Button(left_frame, text="📝 Create Script", command=self.open_script_generator, state=tk.DISABLED)
-        self.script_button.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.script_button = ttk.Button(left_frame, text="📝 Script", command=self.open_script_generator, state=tk.DISABLED)
+        self.script_button.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         
         # Progress bar
         self.progress = ttk.Progressbar(left_frame, mode='indeterminate')
-        self.progress.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
+        self.progress.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        # Export controls
-        ttk.Separator(left_frame, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
-        ttk.Label(left_frame, text="Export:", font=("Arial", 12, "bold")).grid(row=12, column=0, sticky=tk.W, pady=(0, 10))
+        # Export controls - more compact
+        ttk.Separator(left_frame, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
+        ttk.Label(left_frame, text="Export:", font=("Arial", 10, "bold")).grid(row=12, column=0, sticky=tk.W, pady=(0, 5))
         
-        export_text = "📤 Export EDL" if EDL_EXPORT_AVAILABLE else "📤 Export (Text Only)"
+        export_text = "📤 Export EDL" if EDL_EXPORT_AVAILABLE else "📤 Export Text"
         self.export_button = ttk.Button(left_frame, text=export_text, command=self.export_edl, state=tk.DISABLED)
         self.export_button.grid(row=13, column=0, columnspan=2, sticky=(tk.W, tk.E))
     
     def _setup_clip_names_section(self, parent):
         """Setup the custom clip names editing section"""
-        # Label for clip names
-        ttk.Label(parent, text="Custom Clip Names for EDL:").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
+        # Label for clip names - more compact
+        ttk.Label(parent, text="Clip Names:").grid(row=4, column=0, sticky=tk.W, pady=(5, 2))
         
-        # Scrollable frame for clip name entries
-        self.clip_names_canvas = tk.Canvas(parent, height=100)
-        self.clip_names_canvas.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Scrollable frame for clip name entries - reduced height
+        self.clip_names_canvas = tk.Canvas(parent, height=80)
+        self.clip_names_canvas.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         
         self.clip_names_scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.clip_names_canvas.yview)
-        self.clip_names_scrollbar.grid(row=5, column=1, sticky=(tk.N, tk.S, tk.E), pady=(0, 10))
+        self.clip_names_scrollbar.grid(row=5, column=1, sticky=(tk.N, tk.S, tk.E), pady=(0, 5))
         
         self.clip_names_canvas.configure(yscrollcommand=self.clip_names_scrollbar.set)
         
@@ -190,34 +190,34 @@ class SmartEditMainWindow:
         self.clip_name_entries.clear()
         
         if not self.video_files:
-            # Show placeholder text when no videos
-            ttk.Label(self.clip_names_frame, text="Add videos to edit their clip names", 
-                     foreground="gray").grid(row=0, column=0, pady=10)
+            # Show placeholder text when no videos - smaller text
+            ttk.Label(self.clip_names_frame, text="Add videos to edit clip names", 
+                     foreground="gray", font=("Arial", 8)).grid(row=0, column=0, pady=5)
             return
         
-        # Create entry for each video file
+        # Create entry for each video file - more compact layout
         for i, video_path in enumerate(self.video_files):
             filename = os.path.basename(video_path)
             
-            # Frame for this clip name entry
+            # Frame for this clip name entry - reduced padding
             entry_frame = ttk.Frame(self.clip_names_frame)
-            entry_frame.grid(row=i, column=0, sticky=(tk.W, tk.E), pady=2, padx=5)
+            entry_frame.grid(row=i, column=0, sticky=(tk.W, tk.E), pady=1, padx=2)
             entry_frame.columnconfigure(1, weight=1)
             
-            # Label showing original filename (truncated if too long)
-            display_filename = filename if len(filename) <= 20 else filename[:17] + "..."
-            ttk.Label(entry_frame, text=f"{i+1}.", width=3).grid(row=0, column=0, padx=(0, 5))
-            ttk.Label(entry_frame, text=display_filename, width=20).grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
-            ttk.Label(entry_frame, text="→").grid(row=0, column=2, padx=5)
+            # Label showing original filename (truncated if too long) - smaller width
+            display_filename = filename if len(filename) <= 15 else filename[:12] + "..."
+            ttk.Label(entry_frame, text=f"{i+1}.", width=2).grid(row=0, column=0, padx=(0, 2))
+            ttk.Label(entry_frame, text=display_filename, width=15).grid(row=0, column=1, sticky=tk.W, padx=(0, 2))
+            ttk.Label(entry_frame, text="→").grid(row=0, column=2, padx=2)
             
-            # Entry for custom name
+            # Entry for custom name - reduced width
             custom_name_var = tk.StringVar()
             # Pre-fill with existing custom name if available
             if i in self.custom_clip_names:
                 custom_name_var.set(self.custom_clip_names[i])
             
-            entry = ttk.Entry(entry_frame, textvariable=custom_name_var, width=20)
-            entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
+            entry = ttk.Entry(entry_frame, textvariable=custom_name_var, width=15)
+            entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 2))
             
             # Store the variable and index for later retrieval
             self.clip_name_entries.append((i, custom_name_var))
@@ -240,7 +240,7 @@ class SmartEditMainWindow:
     
     def _setup_right_panel(self, parent):
         """Setup right results panel"""
-        right_frame = ttk.LabelFrame(parent, text="Results & Logs", padding="10")
+        right_frame = ttk.LabelFrame(parent, text="Results & Logs", padding="5")
         right_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(0, weight=1)
@@ -249,10 +249,10 @@ class SmartEditMainWindow:
         # Results display
         self.results_text = ScrolledText(right_frame, height=self.RESULTS_TEXT_HEIGHT, 
                                         width=self.RESULTS_TEXT_WIDTH, state=tk.DISABLED)
-        self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
         
-        # Log label
-        ttk.Label(right_frame, text="Processing Log:").grid(row=1, column=0, sticky=tk.W, pady=(10, 5))
+        # Log label - smaller padding
+        ttk.Label(right_frame, text="Log:").grid(row=1, column=0, sticky=tk.W, pady=(5, 2))
         
         # Log display
         self.log_text = ScrolledText(right_frame, height=self.LOG_TEXT_HEIGHT, 
