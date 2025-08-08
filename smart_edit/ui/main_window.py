@@ -57,6 +57,8 @@ class SmartEditMainWindow:
         self.generated_script = None
         self.processing_thread = None
         self.project_name = "Untitled Project"
+        self.custom_clip_names = {}  # Store custom clip names
+        self.clip_name_entries = []  # Store UI entry widgets
         
         self._setup_ui()
         self._setup_menu()
@@ -119,32 +121,122 @@ class SmartEditMainWindow:
         
         # File buttons
         button_frame = ttk.Frame(left_frame)
-        button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
+        button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         ttk.Button(button_frame, text="Add Videos", command=self.add_videos).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Remove", command=self.remove_video).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Clear All", command=self.clear_videos).pack(side=tk.LEFT)
         
+        # Custom clip names section
+        self._setup_clip_names_section(left_frame)
+        
         # Processing controls
-        ttk.Separator(left_frame, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
-        ttk.Label(left_frame, text="Processing:", font=("Arial", 12, "bold")).grid(row=5, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Separator(left_frame, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
+        ttk.Label(left_frame, text="Processing:", font=("Arial", 12, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(0, 10))
         
         self.transcribe_button = ttk.Button(left_frame, text="🎤 Transcribe Videos", command=self.start_transcription)
-        self.transcribe_button.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        self.transcribe_button.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         
         self.script_button = ttk.Button(left_frame, text="📝 Create Script", command=self.open_script_generator, state=tk.DISABLED)
-        self.script_button.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.script_button.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Progress bar
         self.progress = ttk.Progressbar(left_frame, mode='indeterminate')
-        self.progress.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
+        self.progress.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
         
         # Export controls
-        ttk.Separator(left_frame, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
-        ttk.Label(left_frame, text="Export:", font=("Arial", 12, "bold")).grid(row=10, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Separator(left_frame, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
+        ttk.Label(left_frame, text="Export:", font=("Arial", 12, "bold")).grid(row=12, column=0, sticky=tk.W, pady=(0, 10))
         
         export_text = "📤 Export EDL" if EDL_EXPORT_AVAILABLE else "📤 Export (Text Only)"
         self.export_button = ttk.Button(left_frame, text=export_text, command=self.export_edl, state=tk.DISABLED)
-        self.export_button.grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E))
+        self.export_button.grid(row=13, column=0, columnspan=2, sticky=(tk.W, tk.E))
+    
+    def _setup_clip_names_section(self, parent):
+        """Setup the custom clip names editing section"""
+        # Label for clip names
+        ttk.Label(parent, text="Custom Clip Names for EDL:").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
+        
+        # Scrollable frame for clip name entries
+        self.clip_names_canvas = tk.Canvas(parent, height=100)
+        self.clip_names_canvas.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.clip_names_scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.clip_names_canvas.yview)
+        self.clip_names_scrollbar.grid(row=5, column=1, sticky=(tk.N, tk.S, tk.E), pady=(0, 10))
+        
+        self.clip_names_canvas.configure(yscrollcommand=self.clip_names_scrollbar.set)
+        
+        # Frame inside canvas for clip name entries
+        self.clip_names_frame = ttk.Frame(self.clip_names_canvas)
+        self.clip_names_canvas_window = self.clip_names_canvas.create_window((0, 0), window=self.clip_names_frame, anchor="nw")
+        
+        # Bind canvas resize
+        self.clip_names_frame.bind("<Configure>", self._on_clip_names_frame_configure)
+        self.clip_names_canvas.bind("<Configure>", self._on_clip_names_canvas_configure)
+    
+    def _on_clip_names_frame_configure(self, event):
+        """Update canvas scroll region when frame size changes"""
+        self.clip_names_canvas.configure(scrollregion=self.clip_names_canvas.bbox("all"))
+    
+    def _on_clip_names_canvas_configure(self, event):
+        """Update frame width when canvas size changes"""
+        canvas_width = event.width
+        self.clip_names_canvas.itemconfig(self.clip_names_canvas_window, width=canvas_width)
+    
+    def _update_clip_names_ui(self):
+        """Update the clip names editing UI based on current video files"""
+        # Clear existing entries
+        for widget in self.clip_names_frame.winfo_children():
+            widget.destroy()
+        self.clip_name_entries.clear()
+        
+        if not self.video_files:
+            # Show placeholder text when no videos
+            ttk.Label(self.clip_names_frame, text="Add videos to edit their clip names", 
+                     foreground="gray").grid(row=0, column=0, pady=10)
+            return
+        
+        # Create entry for each video file
+        for i, video_path in enumerate(self.video_files):
+            filename = os.path.basename(video_path)
+            
+            # Frame for this clip name entry
+            entry_frame = ttk.Frame(self.clip_names_frame)
+            entry_frame.grid(row=i, column=0, sticky=(tk.W, tk.E), pady=2, padx=5)
+            entry_frame.columnconfigure(1, weight=1)
+            
+            # Label showing original filename (truncated if too long)
+            display_filename = filename if len(filename) <= 20 else filename[:17] + "..."
+            ttk.Label(entry_frame, text=f"{i+1}.", width=3).grid(row=0, column=0, padx=(0, 5))
+            ttk.Label(entry_frame, text=display_filename, width=20).grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
+            ttk.Label(entry_frame, text="→").grid(row=0, column=2, padx=5)
+            
+            # Entry for custom name
+            custom_name_var = tk.StringVar()
+            # Pre-fill with existing custom name if available
+            if i in self.custom_clip_names:
+                custom_name_var.set(self.custom_clip_names[i])
+            
+            entry = ttk.Entry(entry_frame, textvariable=custom_name_var, width=20)
+            entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
+            
+            # Store the variable and index for later retrieval
+            self.clip_name_entries.append((i, custom_name_var))
+            
+            # Bind to update custom names when changed
+            custom_name_var.trace('w', lambda *args, idx=i, var=custom_name_var: self._on_clip_name_change(idx, var))
+        
+        # Update scroll region
+        self.clip_names_frame.update_idletasks()
+        self.clip_names_canvas.configure(scrollregion=self.clip_names_canvas.bbox("all"))
+    
+    def _on_clip_name_change(self, video_index, name_var):
+        """Handle clip name changes"""
+        custom_name = name_var.get().strip()
+        if custom_name:
+            self.custom_clip_names[video_index] = custom_name
+        elif video_index in self.custom_clip_names:
+            # Remove empty custom names
+            del self.custom_clip_names[video_index]
     
     def _setup_right_panel(self, parent):
         """Setup right results panel"""
@@ -228,6 +320,7 @@ class SmartEditMainWindow:
         self.clear_videos()
         self.project_name = "Untitled Project"
         self.project_name_var.set(self.project_name)
+        self.custom_clip_names.clear()  # Clear custom clip names
         self.log_message("🆕 Started new project")
     
     def add_videos(self):
@@ -254,6 +347,9 @@ class SmartEditMainWindow:
             
             self.file_listbox.insert(tk.END, display_name)
             added_count += 1
+        
+        # Update clip names UI
+        self._update_clip_names_ui()
         
         # Show results
         if added_count > 0:
@@ -284,6 +380,21 @@ class SmartEditMainWindow:
         if 0 <= index < len(self.video_files):
             self.file_listbox.delete(index)
             removed_file = self.video_files.pop(index)
+            
+            # Update custom clip names - shift indices down for files after removed one
+            new_custom_names = {}
+            for vid_idx, custom_name in self.custom_clip_names.items():
+                if vid_idx < index:
+                    # Keep indices before removed file
+                    new_custom_names[vid_idx] = custom_name
+                elif vid_idx > index:
+                    # Shift indices after removed file down by 1
+                    new_custom_names[vid_idx - 1] = custom_name
+                # Skip the removed index
+            self.custom_clip_names = new_custom_names
+            
+            # Update UI
+            self._update_clip_names_ui()
             self.log_message(f"🗑️ Removed: {os.path.basename(removed_file)}")
             self.update_status(f"{len(self.video_files)} video(s) loaded")
             
@@ -294,6 +405,8 @@ class SmartEditMainWindow:
         """Clear all videos from the list"""
         self.video_files.clear()
         self.file_listbox.delete(0, tk.END)
+        self.custom_clip_names.clear()  # Clear custom clip names
+        self._update_clip_names_ui()
         self._reset_processing_state()
         self.update_status("Ready - Load video files to begin")
         self.log_message("🗑️ Cleared all video files")
@@ -550,7 +663,8 @@ class SmartEditMainWindow:
                     script=self.generated_script,
                     video_paths=self.video_files,
                     output_path=output_path,
-                    sequence_name=os.path.splitext(os.path.basename(output_path))[0]
+                    sequence_name=os.path.splitext(os.path.basename(output_path))[0],
+                    custom_clip_names=self.custom_clip_names  # Pass custom clip names
                 )
                 
                 if success:

@@ -42,7 +42,8 @@ class EDLExporter:
         self.fps = fps
     
     def export_script(self, script: GeneratedScript, video_paths: Union[str, List[str]], 
-                     output_path: str, sequence_name: str = "SmartEdit_Timeline") -> bool:
+                     output_path: str, sequence_name: str = "SmartEdit_Timeline",
+                     custom_clip_names: Optional[Dict[int, str]] = None) -> bool:
         """
         Export script to EDL format
         
@@ -51,6 +52,7 @@ class EDLExporter:
             video_paths: List of video file paths (or single path)
             output_path: Output EDL file path
             sequence_name: Name for the sequence
+            custom_clip_names: Optional dict mapping video_index to custom clip names
         
         Returns:
             bool: True if successful, False otherwise
@@ -72,7 +74,7 @@ class EDLExporter:
             logger.info(f"Exporting {len(segments)} segments to EDL format")
             
             # Generate EDL content
-            edl_content = self._create_edl(segments, video_paths, sequence_name)
+            edl_content = self._create_edl(segments, video_paths, sequence_name, custom_clip_names)
             
             # Save to file
             self._save_edl(edl_content, output_path)
@@ -111,7 +113,7 @@ class EDLExporter:
         return segments
     
     def _create_edl(self, segments: List[ScriptSegment], video_paths: List[str], 
-                   sequence_name: str) -> str:
+                   sequence_name: str, custom_clip_names: Optional[Dict[int, str]] = None) -> str:
         """Create EDL content from segments"""
         
         # EDL Header
@@ -153,11 +155,17 @@ class EDLExporter:
             timeline_tc_in = self._seconds_to_timecode(timeline_start)
             timeline_tc_out = self._seconds_to_timecode(timeline_end)
             
+            # Get clip name - use custom name if available, otherwise original filename
+            if custom_clip_names and video_index in custom_clip_names:
+                clip_name = custom_clip_names[video_index]
+            else:
+                clip_name = Path(video_paths[video_index]).name
+            
             # EDL edit entry format matching your sample:
             # Uses AA/V for combined audio/video track like professional EDLs
             edl_lines.extend([
                 f"{edit_number}  {source_reel:<8} AA/V  C        {source_tc_in} {source_tc_out} {timeline_tc_in} {timeline_tc_out} ",
-                f"* FROM CLIP NAME: {Path(video_paths[video_index]).name}",
+                f"* FROM CLIP NAME: {clip_name}",
             ])
             
             # Add segment content as comment if available
@@ -248,7 +256,7 @@ class CMX3600EDLExporter(EDLExporter):
     """CMX 3600 standard EDL exporter with enhanced compatibility"""
     
     def _create_edl(self, segments: List[ScriptSegment], video_paths: List[str], 
-                   sequence_name: str) -> str:
+                   sequence_name: str, custom_clip_names: Optional[Dict[int, str]] = None) -> str:
         """Create CMX 3600 compliant EDL matching professional standards"""
         
         # CMX 3600 Header
@@ -290,10 +298,16 @@ class CMX3600EDLExporter(EDLExporter):
             timeline_tc_in = self._seconds_to_timecode(timeline_start)
             timeline_tc_out = self._seconds_to_timecode(timeline_end)
             
+            # Get clip name - use custom name if available, otherwise original filename
+            if custom_clip_names and video_index in custom_clip_names:
+                clip_name = custom_clip_names[video_index]
+            else:
+                clip_name = Path(video_paths[video_index]).name
+            
             # CMX 3600 format with AA/V track (combined audio/video)
             edl_lines.extend([
                 f"{edit_number}  {source_reel:<8} AA/V  C        {source_tc_in} {source_tc_out} {timeline_tc_in} {timeline_tc_out} ",
-                f"* FROM CLIP NAME: {Path(video_paths[video_index]).name}",
+                f"* FROM CLIP NAME: {clip_name}",
             ])
             
             timeline_position = timeline_end
@@ -303,7 +317,7 @@ class CMX3600EDLExporter(EDLExporter):
 # Convenience function
 def export_script_to_edl(script: GeneratedScript, video_paths: Union[str, List[str]], 
                         output_path: str, fps: int = 24, sequence_name: str = "SmartEdit",
-                        edl_format: str = "standard") -> bool:
+                        edl_format: str = "standard", custom_clip_names: Optional[Dict[int, str]] = None) -> bool:
     """
     Export script to EDL format
     
@@ -314,6 +328,7 @@ def export_script_to_edl(script: GeneratedScript, video_paths: Union[str, List[s
         fps: Frame rate for timecode calculations (default 24)
         sequence_name: Name for the sequence
         edl_format: EDL format variant ("standard" or "cmx3600")
+        custom_clip_names: Optional dict mapping video_index to custom clip names
     
     Returns:
         bool: True if successful, False otherwise
@@ -323,7 +338,7 @@ def export_script_to_edl(script: GeneratedScript, video_paths: Union[str, List[s
     else:
         exporter = EDLExporter(fps=fps)
     
-    return exporter.export_script(script, video_paths, output_path, sequence_name)
+    return exporter.export_script(script, video_paths, output_path, sequence_name, custom_clip_names)
 
 # Example usage and format documentation
 if __name__ == "__main__":
